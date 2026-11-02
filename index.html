@@ -9,11 +9,10 @@
 <link rel="icon" type="image/svg+xml" href="icons/icon.svg">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="mobile-web-app-capable" content="yes">
 <title>Clay</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 :root{
   /* Clay: a calm workbench. Icon rail + floating cards on a soft chrome; 8px gaps double as resize handles. GitHub-style syntax, clay-orange accent. */
@@ -29,8 +28,8 @@
   --s-kw:#8250df; --s-create:#cf222e; --s-act:#0550ae; --s-fn:#6639ba; --s-key:#116329; --s-label:#953800;
   --s-str:#0a3069; --s-interp:#1a7f37; --s-num:#0550ae; --s-com:#6e7781; --s-op:#57606a; --s-id:#1f2328;
   --s-ai:#8250df; --s-ai-bg:#fbefff; --s-raw:#57606a; --s-sel:#0969da;
-  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-  --ui:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"Geist Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --ui:"Geist",system-ui,-apple-system,"Segoe UI",sans-serif;
   --display:"Bricolage Grotesque","IBM Plex Sans",system-ui,sans-serif;
   --fs:13.5px; --lh:22px; --rw:42%; --ph:38%;
   color-scheme:light;
@@ -386,6 +385,31 @@ kbd{font:500 11px var(--mono);border:1px solid var(--border);border-bottom-width
 .helpcard pre,.errcard code,.helpcard code{border-radius:3px}
 .helpcard .cat{border-radius:3px}
 .colorpop input[type=color]{border-radius:4px}
+
+/* right side polish */
+.right{background:var(--sunken);gap:0}
+.ghead,.panel-pane .tabstrip{background:var(--card)}
+.ghead{height:38px;padding:0 8px 0 14px}
+.ghead .ttl{font-size:13px}
+.preview{background:radial-gradient(circle at 50% 40%,color-mix(in srgb,var(--preview) 70%,var(--card)) 0%,var(--preview) 70%);}
+.preview::before{content:"";position:absolute;inset:0;background-image:radial-gradient(color-mix(in srgb,var(--faint) 30%,transparent) 1px,transparent 1px);background-size:20px 20px;opacity:.5;pointer-events:none}
+.preview canvas{position:relative;outline:none;box-shadow:0 0 0 1px var(--border),0 18px 40px -12px rgba(0,0,0,.35)}
+.preview:focus canvas{box-shadow:0 0 0 2px var(--accent),0 18px 40px -12px rgba(0,0,0,.4)}
+.panel-pane .tab-b{padding:0 16px;font-size:12.5px}
+.coachbar{padding:10px 14px;background:var(--card)}
+#coachList{padding:10px;display:grid;gap:8px}
+.tip{border:1px solid var(--border-soft);border-left-width:3px;background:var(--card);padding:12px 14px;transition:border-color .15s,transform .15s}
+.tip:hover{border-color:var(--border);transform:translateX(2px)}
+.tip .ic{border-radius:50%}
+.ptab{background:var(--sunken)}
+.console{padding:8px}
+.console .row{background:var(--card);border:1px solid var(--border-soft);border-left-width:3px;margin-bottom:6px;padding:7px 12px}
+.console .empty,.empty-msg{background:transparent;border:0}
+.assets{padding:12px}
+.arow{background:var(--card)}
+.docsbar{padding:10px 14px}
+.docs{padding:0 14px 16px}
+.doc pre{background:var(--card);border:1px solid var(--border-soft);border-left:2px solid var(--border)}
 </style>
 </head>
 <body>
