@@ -87,7 +87,6 @@
 @keyframes lshine{to{transform:translateX(100%)}}
 
 *{box-sizing:border-box}
-[hidden]{display:none!important}
 html,body{height:100%;margin:0}
 body{background:var(--card);color:var(--text);font:14px/1.45 var(--ui);overflow:hidden;-webkit-font-smoothing:antialiased}
 button,select,input,textarea{font:inherit;color:inherit}
@@ -178,7 +177,6 @@ body.resizing canvas{pointer-events:none}
 .gn{height:var(--lh);padding:0 22px 0 16px;position:relative;font-variant-numeric:tabular-nums}
 .gn.cur{color:var(--text)}
 .gn.err{background:var(--err-bg);color:var(--err-text);cursor:help}
-.gn.err::before{content:"";position:absolute;left:0;top:0;bottom:0;width:6px;background:repeating-linear-gradient(-45deg,var(--err-mark) 0 2px,transparent 2px 4.5px)}
 .gn.add{background:var(--add-bg)}
 .gn.add::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--add-mark)}
 .fold{position:absolute;right:4px;top:0;height:var(--lh);width:16px;display:grid;place-items:center;color:var(--faint);opacity:0;cursor:pointer;transition:opacity .15s}
@@ -193,7 +191,7 @@ body.resizing canvas{pointer-events:none}
 .hl-inner{display:inline-block;min-width:100%}
 .ln{height:var(--lh);padding:0 16px}
 .ln.cur{background:var(--cur-line)}
-.ln.err{background:var(--err-bg)}
+.ln.err{background:repeating-linear-gradient(-45deg,var(--err-mark) 0 2px,transparent 2px 4.5px) 0 0/6px 100% no-repeat,var(--err-bg);cursor:help}
 .ln.add{background:var(--add-bg)}
 .ig{display:inline-block;height:var(--lh);vertical-align:top;background:linear-gradient(var(--guide),var(--guide)) 1px 0/1px 100% no-repeat}
 .ig.on{background-image:linear-gradient(var(--guide-on),var(--guide-on))}
@@ -210,6 +208,7 @@ body.resizing canvas{pointer-events:none}
 .t-com{color:var(--s-com);font-style:italic}.t-fn{color:var(--s-fn)}.t-op{color:var(--s-op)}.t-raw{color:var(--s-raw)}
 .t-sel{color:var(--s-sel);font-weight:600}
 .t-ai{color:var(--s-ai);font-style:italic;background:var(--s-ai-bg)}
+.t-unit{opacity:.75}
 .t-alias{text-decoration:underline dotted;text-underline-offset:3px;text-decoration-thickness:1px}
 
 /* ---------- right side ---------- */
@@ -951,7 +950,7 @@ function compileViewItems(nodes,prog,isMain){
   }
   return items;
 }
-function compile(src,langSrc,viewSrc){
+function compileLegacy(src,langSrc,viewSrc){
   let lang;
   try{lang=compileLanguage(langSrc||'');}
   catch(e){ALIASES=new Map();e.clayFile='language';throw e;}
@@ -976,6 +975,425 @@ function compile(src,langSrc,viewSrc){
     prog.behaviors=lang.behaviors;prog.langJs=lang.js;
     return prog;
   } finally {ALIASES=new Map();}
+}
+
+
+/* ================= Clay 2: braces, units, CSS looks ================= */
+const PROP_MAP={sight:'ai.sight',reaction:'ai.reaction',givesUp:'ai.gives_up',patrolRange:'ai.patrol',followDistance:'ai.distance',bullet:'ai.bullet',fireRate:'ai.fire_rate',area:'ai.area',
+  showHealth:'show_health',jumpBuffer:'jump_buffer',glowSize:'glow_size',outlineWidth:'outline_width',repeatX:'repeat_x',jumpPower:'jump',fontSize:'size',fontFamily:'font',fontWeight:'weight'};
+const mapProp=p=>PROP_MAP[p]||p;
+const UNIT_MULT={px:1,s:1,ms:0.001,deg:1,'%':0.01,'px/s':1,'px/s2':1};
+const CONT_OPS=new Set(['+','-','*','/','%','&&','||','==','!=','===','!==','<','>','<=','>=','=','+=','-=','*=','/=',',','(','[','{','!','.','=>']);
+function lex2(src){
+  const toks=[];let i=0,line=1,depth=0,lineStart=true;const n=src.length;
+  const push=(t,v,x)=>{const tk={t,v,line};if(x)Object.assign(tk,x);toks.push(tk);return tk;};
+  const last=()=>toks[toks.length-1];
+  while(i<n){
+    const c=src[i];
+    if(c==='\n'){const l=last();if(depth===0&&l&&l.t!=='nl'&&!(l.t==='op'&&CONT_OPS.has(l.v)))push('nl','\n');line++;i++;lineStart=true;continue;}
+    if(c===' '||c==='\t'||c==='\r'){i++;continue;}
+    if(c==='?'){let j=src.indexOf('\n',i);if(j<0)j=n;push('ai',src.slice(i,j).trim());i=j;continue;}
+    lineStart=false;
+    if(c==='/'&&src[i+1]==='/'){while(i<n&&src[i]!=='\n')i++;continue;}
+    if(c==='/'&&src[i+1]==='*'){const j=src.indexOf('*/',i+2),end=j<0?n:j+2;for(let k=i;k<end;k++)if(src[k]==='\n')line++;i=end;continue;}
+    if(c==='"'||c==="'"){let j=i+1,v='';while(j<n&&src[j]!==c&&src[j]!=='\n'){if(src[j]==='\\'&&j+1<n){v+=src[j+1];j+=2;continue;}v+=src[j++];}
+      if(src[j]!==c)throw E(line,'This text is missing its closing quote '+c);push('str',v);i=j+1;continue;}
+    const s=src.slice(i,i+24);let m;
+    if(c==='#'&&(m=/^#[0-9a-fA-F]{3,8}(?![\w])/.exec(s))){push('str',m[0],{color:true});i+=m[0].length;continue;}
+    if((m=/^(\d+\.?\d*|\.\d+)(px\/s2|px\/s|px|ms|s|deg|%)?(?![A-Za-z_\d])/.exec(s))){push('num',parseFloat(m[1])*(m[2]?UNIT_MULT[m[2]]:1),{unit:m[2]||''});i+=m[0].length;continue;}
+    if((m=/^[A-Za-z_][A-Za-z0-9_]*/.exec(s))&&m[0].length<24||(m=/^[A-Za-z_][A-Za-z0-9_]*/.exec(src.slice(i,i+200)))){
+      const v=m[0];i+=v.length;
+      if(ALIASES.size&&ALIASES.has(v)){for(const t of ALIASES.get(v))push(t.t,t.v,{unit:t.unit,color:t.color});continue;}
+      push('id',v);
+      // raw blocks: js { ... }
+      if(v==='js'){let k=i;while(k<n&&/\s/.test(src[k])){if(src[k]==='\n')line++;k++;}
+        if(src[k]==='{'){let d=1,j=k+1;const st=line;while(j<n&&d>0){const ch=src[j];if(ch==='{')d++;else if(ch==='}')d--;else if(ch==='\n')line++;if(d>0)j++;}
+          if(d>0)throw E(st,'This js block is missing its closing }');push('raw',src.slice(k+1,j));i=j+1;}}
+      continue;}
+    if(c==='.'&&last()&&last().t==='nl')toks.pop();
+    const ops=['===','!==','==','!=','<=','>=','&&','||','+=','-=','*=','/=','=>','->','→','+','-','*','/','%','<','>','=','!','(',')','[',']','{','}',',',':',';','.'];
+    const op=ops.find(o=>src.startsWith(o,i));
+    if(op){
+      if(op==='('||op==='[')depth++;else if(op===')'||op===']')depth=Math.max(0,depth-1);
+      if((op===')'||op===']'||op==='}')&&last()&&last().t==='nl'&&op!=='}')toks.pop();
+      push('op',op==='->'||op==='→'?'=>':op);i+=op.length;continue;}
+    throw E(line,'Clay doesn\'t know the character "'+c+'"');
+  }
+  push('eof','');return toks;
+}
+const TYPE_WORDS=new Set(['player','ai','object']);
+const DIR_WORDS=new Set(['left','right','up','down']);
+const NAME_ARG_FNS=new Set(['spawn','all','count','nearest']);
+const NAME_ARG_METHODS=new Set(['touching','touched','walkToward','walkAwayFrom','distanceTo']);
+class P2{
+  constructor(toks,ctx){this.t=toks;this.i=0;this.ctx=ctx||{};}
+  peek(o=0){return this.t[Math.min(this.i+o,this.t.length-1)];}
+  next(){return this.t[this.i++]||this.t[this.t.length-1];}
+  is(t,v,o=0){const k=this.peek(o);return k.t===t&&(v===undefined||k.v===v);}
+  isOp(v,o){return this.is('op',v,o);}
+  isId(v,o){return this.is('id',v,o);}
+  accept(t,v){if(this.is(t,v)){return this.next();}return null;}
+  line(){return this.peek().line;}
+  fail(msg){throw E(this.line(),msg);}
+  near(){const k=this.peek();return k.t==='eof'?' but the file ended':k.t==='nl'?' but the line ended':' but found "'+k.v+'"';}
+  expectOp(v,why){if(!this.accept('op',v))this.fail((why||'Expected "'+v+'"')+this.near());}
+  ident(what){const k=this.peek();if(k.t!=='id')this.fail('Expected '+(what||'a name')+this.near());this.i++;return k.v;}
+  skipSep(){while(this.is('nl')||this.isOp(';'))this.i++;}
+  endStmt(){if(this.isOp(';')||this.is('nl')){this.skipSep();return;}if(this.isOp('}')||this.is('eof'))return;this.fail('I didn\'t expect "'+this.peek().v+'" here. Each instruction goes on its own line or ends with ;');}
+  /* ---- expressions ---- */
+  expr(){return this.or();}
+  or(){let a=this.and();while(this.accept('op','||')||this.accept('id','or'))a={k:'bin',op:'or',a,b:this.and()};return a;}
+  and(){let a=this.not();while(this.accept('op','&&')||this.accept('id','and'))a={k:'bin',op:'and',a,b:this.not()};return a;}
+  not(){if(this.accept('op','!')||this.accept('id','not'))return {k:'not',a:this.not()};return this.cmp();}
+  cmp(){const a=this.add();const map={'==':'==','===':'==','!=':'!=','!==':'!=','<':'<','>':'>','<=':'<=','>=':'>='};
+    const k=this.peek();if(k.t==='op'&&map[k.v]){this.i++;return {k:'bin',op:map[k.v],a,b:this.add()};}return a;}
+  add(){let a=this.mul();for(;;){if(this.accept('op','+'))a={k:'bin',op:'+',a,b:this.mul()};else if(this.accept('op','-'))a={k:'bin',op:'-',a,b:this.mul()};else return a;}}
+  mul(){let a=this.unary();for(;;){const k=this.peek();if(k.t==='op'&&(k.v==='*'||k.v==='/'||k.v==='%')){this.i++;a={k:'bin',op:k.v,a,b:this.unary()};}else return a;}}
+  unary(){if(this.accept('op','-'))return {k:'neg',a:this.unary()};if(this.accept('op','+'))return this.unary();return this.postfix(this.primary());}
+  args(){const a=[];if(this.accept('op',')'))return a;do{a.push(this.expr());}while(this.accept('op',','));this.expectOp(')','Expected ")" to close the ( ');return a;}
+  nameArg(ast){return ast&&ast.k==='var'&&ast.name.indexOf('.')<0&&ast.name!=='self'?{k:'nov',name:ast.name,ast}:ast;}
+  postfix(a){
+    for(;;){
+      if(this.isOp('.')&&this.is('id',undefined,1)){this.i++;const nm=this.next().v;
+        if(this.isOp('(')){this.i++;let args=this.args();if(NAME_ARG_METHODS.has(nm))args=args.map(x=>this.nameArg(x));a={k:'mcall',obj:a,name:nm,args,line:this.line()};}
+        else a={k:'member',obj:a,prop:mapProp(nm)};continue;}
+      if(this.accept('op','[')){const idx=this.expr();this.expectOp(']');a={k:'index',a,idx};continue;}
+      return a;
+    }
+  }
+  pathFrom(first){
+    const segs=[first];
+    while(this.isOp('.')&&this.is('id',undefined,1)&&!this.isOp('(',2)){this.i++;segs.push(this.next().v);}
+    return segs;
+  }
+  rootName(n){return (n==='this'||(this.ctx.self&&n===this.ctx.self))?'self':n;}
+  primary(){
+    const k=this.next();
+    if(k.t==='num')return {k:'lit',v:k.v,unit:k.unit};
+    if(k.t==='str')return k.color?{k:'lit',v:k.v}:compileString2(k.v,k.line,this.ctx);
+    if(k.t==='op'){
+      if(k.v==='('){const e=this.expr();this.expectOp(')');return e;}
+      if(k.v==='['){const items=[];if(!this.accept('op',']')){do{items.push(this.expr());}while(this.accept('op',','));this.expectOp(']');}return {k:'list',items};}
+      if(k.v==='.'&&this.is('id')){return {k:'lit',v:'.'+this.next().v};}
+      this.i--;this.fail('I didn\'t expect "'+k.v+'" here');
+    }
+    if(k.t!=='id'){this.i--;this.fail('Something is missing here'+this.near());}
+    const v=k.v;
+    if(v==='true'||v==='on'||v==='yes')return {k:'lit',v:true};
+    if(v==='false'||v==='off'||v==='no')return {k:'lit',v:false};
+    if(v==='null'||v==='nothing')return {k:'lit',v:null};
+    if(DIR_WORDS.has(v)||TYPE_WORDS.has(v)||v==='frame')return {k:'lit',v};
+    if((v==='keydown'||v==='keypressed'||v==='keyreleased')&&this.isOp('(')){
+      this.i++;const kt=this.peek();let name='';
+      if(kt.t==='str'){this.i++;name=kt.v;}else if(kt.t==='id'){this.i++;name=this.pathFrom(kt.v).join('.');}
+      this.expectOp(')');const code=keyCodeFor(name)||keyCodeFor(name+'.key');
+      if(!code)throw E(k.line,'"'+name+'" isn\'t a key name. Try right.arrow, space.bar, a.key or mouse.left');
+      return {k:'keyq',mode:v==='keydown'?'held':v==='keypressed'?'pressed':'released',key:code};
+    }
+    if(this.isOp('(')){this.i++;let args=this.args();if(NAME_ARG_FNS.has(v))args=args.map(x=>this.nameArg(x));return {k:'call',name:v,args,line:k.line};}
+    const segs=this.pathFrom(v);
+    if(this.isOp('(')&&segs.length>1){this.i++;const nm=segs.pop();let args=this.args();if(NAME_ARG_METHODS.has(nm))args=args.map(x=>this.nameArg(x));
+      return {k:'mcall',obj:{k:'var',name:this.rootName(segs[0])+segs.slice(1).map(s=>'.'+mapProp(s)).join(''),strict:true},name:nm,args,line:k.line};}
+    const joined=segs.join('.');if(segs.length>1&&keyCodeFor(joined))return {k:'key',key:keyCodeFor(joined)};
+    return {k:'var',name:this.rootName(segs[0])+segs.slice(1).map(s=>'.'+mapProp(s)).join(''),strict:true};
+  }
+  valueList(){
+    const items=[this.expr()];
+    for(;;){
+      if(this.accept('op',',')){items.push(this.expr());continue;}
+      const k=this.peek();
+      if(k.t==='num'||k.t==='str'||(k.t==='id'&&!['and','or','not'].includes(k.v))||(k.t==='op'&&(k.v==='('||k.v==='['))){items.push(this.expr());continue;}
+      break;
+    }
+    return items.length>1?{k:'list',items}:items[0];
+  }
+  /* ---- statements ---- */
+  block(what){
+    this.skipNlOnly();
+    if(!this.accept('op','{'))this.fail('Put the code for this '+(what||'block')+' inside { }'+this.near());
+    const out=[];this.skipSep();
+    while(!this.isOp('}')){if(this.is('eof'))this.fail('A { was opened but never closed with }');out.push(...this.statement());this.skipSep();}
+    this.next();return out;
+  }
+  skipNlOnly(){while(this.is('nl'))this.i++;}
+  cond(){return this.expr();}
+  ifStmt(){
+    const line=this.line();const cond=this.cond();const then=this.block('if');const st={k:'if',cond,then,else:null,line};
+    const save=this.i;this.skipNlOnly();
+    if(this.accept('id','else')){if(this.accept('id','if'))st.else=[this.ifStmt()];else st.else=this.block('else');}
+    else this.i=save;
+    return st;
+  }
+  statement(){
+    const k=this.peek(),line=k.line;
+    if(k.t==='ai'){this.i++;return [{k:'ai',line}];}
+    if(k.t==='id'){
+      switch(k.v){
+        case 'let':case 'const':case 'var':{this.i++;const name=this.ident('a variable name');let value={k:'lit',v:null};if(this.accept('op','='))value=this.valueList();this.endStmt();return [{k:'let',name,value,line}];}
+        case 'if':this.i++;{const st=this.ifStmt();this.endStmt();return [st];}
+        case 'while':{this.i++;const cond=this.cond();const body=this.block('while loop');return [{k:'while',cond,body,line}];}
+        case 'repeat':{this.i++;this.expectOp('(','Write repeat(5) { }');const count=this.expr();this.expectOp(')');const body=this.block('repeat');return [{k:'repeat',count,body,line}];}
+        case 'for':{this.i++;const paren=this.accept('op','(');this.accept('id','let')||this.accept('id','const');const v=this.ident('a loop variable');if(!this.accept('id','of')&&!this.accept('id','in'))this.fail('Write for (let item of list) { }');
+          let list=this.expr();if(list.k==='var'&&list.name.indexOf('.')<0)list={k:'nov',name:list.name,ast:list};if(paren)this.expectOp(')');const body=this.block('for loop');return [{k:'for',v,list,body,line}];}
+        case 'return':{this.i++;let value=null;if(!this.is('nl')&&!this.isOp(';')&&!this.isOp('}'))value=this.expr();this.endStmt();return [{k:'return',value,line}];}
+        case 'after':if(this.isOp('(',1)){this.i++;this.i++;const secs=this.expr();this.expectOp(')');const body=this.block('after');return [{k:'after',secs,body,line}];}break;
+        case 'every':this.fail('every(...) { } goes directly inside a sprite or at the top of the file, not inside other code.');break;
+        case 'sprite':case 'sound':case 'music':case 'scene':case 'function':case 'command':case 'behavior':this.fail('"'+k.v+'" goes at the top level of the file, not inside other code.');break;
+        case 'else':this.fail('"else" needs an "if" right before it');break;
+      }
+    }
+    // assignment or expression
+    const target=this.expr();
+    const op=this.peek();
+    if(op.t==='op'&&['=','+=','-=','*=','/='].includes(op.v)){
+      this.i++;
+      if(this.is('ai')){this.i++;this.endStmt();return [{k:'ai',line}];}
+      {let j=this.i;while(this.t[j]&&this.t[j].t!=='nl'&&this.t[j].t!=='eof'&&!(this.t[j].t==='op'&&this.t[j].v===';')){if(this.t[j].t==='ai'){const keep=this.t.slice(this.i,j).filter(x=>!(x.t==='op'&&x.v===','));this.i=j+1;this.endStmt();if(keep.length&&target.k==='var'&&/behavior$/.test(target.name)){const pp=new P2([...keep,{t:'eof',v:'',line}],this.ctx);const val=behaviorValue(pp.valueList(),line);return [{k:'assign2',target,op:op.v,value:val,line}];}return [{k:'ai',line}];}j++;}}
+      if(target.k!=='var'&&target.k!=='member'&&target.k!=='index')throw E(line,'The left side of = has to be a variable or setting, like score or Knight.speed');
+      let value=this.valueList();
+      const prop=target.k==='var'?target.name.split('.').pop():target.k==='member'?target.prop:'';
+      if(prop==='behavior')value=behaviorValue(value,line);
+      if(prop==='class'&&value.k==='var')value={k:'lit',v:value.name.split('.').pop()};
+      if(prop==='class'&&value.k==='list')value={k:'list',items:value.items.map(x=>x.k==='var'?{k:'lit',v:x.name}:x)};
+      this.endStmt();
+      return [{k:'assign2',target,op:op.v,value,line}];
+    }
+    if(target.k!=='call'&&target.k!=='mcall'){
+      if(target.k==='var'&&target.name.indexOf('.')<0)throw E(line,'"'+target.name+'" on its own doesn\'t do anything. Did you mean to call it, like '+target.name+'()?');
+      throw E(line,'This line doesn\'t do anything. Set something with = or call an action like Knight.jump()');
+    }
+    this.endStmt();return [{k:'expr',e:target,line}];
+  }
+}
+function behaviorValue(v,line){
+  const items=v.k==='list'?v.items:[v];
+  return {k:'list',items:items.map(x=>{
+    if(x.k==='lit')return x;
+    if(x.k==='var')return {k:'lit',v:x.name};
+    if(x.k==='call')return {k:'lit',v:x.name+(x.args.length?' '+x.args.map(a=>a.k==='var'||a.k==='nov'?a.name:a.k==='lit'?a.v:'').join(' '):'')};
+    throw E(line,'Behaviors are written like wander, patrol, chase(Knight)');
+  })};
+}
+function compileString2(s,line,ctx){
+  if(s.indexOf('{')<0)return {k:'lit',v:s};
+  const parts=[];let i=0,buf='';
+  while(i<s.length){const c=s[i];
+    if(c==='{'){const j=s.indexOf('}',i);if(j<0){buf+=s.slice(i);break;}if(buf){parts.push(buf);buf='';}
+      const toks=lex2(s.slice(i+1,j)).filter(t=>t.t!=='nl');toks.forEach(t=>t.line=line);const p=new P2(toks,ctx);parts.push(p.expr());i=j+1;}
+    else{buf+=c;i++;}}
+  if(buf)parts.push(buf);return {k:'interp',parts};
+}
+/* ---- top level of a .claS / scene ---- */
+function compileScript2(src,prog){
+  const p=new P2(lex2(src),{});
+  prog.main=parseItems2(p,prog,true,null);
+}
+function parseItems2(p,prog,isMain,endOnBrace){
+  const scene={items:[]};let stmts=[];
+  const flush=()=>{if(stmts.length){scene.items.push({k:'stmts',body:stmts});stmts=[];}};
+  p.skipSep();
+  while(!(endOnBrace&&p.isOp('}'))&&!p.is('eof')){
+    const k=p.peek(),line=k.line;
+    if(k.t==='ai'){p.i++;p.skipSep();continue;}
+    if(k.t==='id'&&k.v==='sprite'){flush();p.i++;const def=parseSprite2(p);prog.templates[def.name]=def;scene.items.push({k:'create',def});p.skipSep();continue;}
+    if(k.t==='id'&&(k.v==='sound'||k.v==='music')){flush();p.i++;const name=p.ident('a sound name');p.expectOp('=','Write '+k.v+' Name = "file.wav";');const f=p.next();if(f.t!=='str')throw E(line,'Put the file name in quotes, like "ding.wav"');p.endStmt();
+      scene.items.push({k:'create',def:{kind:k.v,name,file:f.v,props:[],events:[],init:[],line}});continue;}
+    if(k.t==='id'&&k.v==='scene'){flush();p.i++;if(!isMain)throw E(line,'A scene can\'t be inside another scene.');const nk=p.next();if(nk.t!=='str')throw E(line,'Write scene "Name" { }');p.skipNlOnly();p.expectOp('{','Put the scene inside { }');
+      prog.scenes[nk.v]=parseItems2(p,prog,false,true);p.expectOp('}');p.skipSep();continue;}
+    if(k.t==='id'&&k.v==='function'){flush();p.i++;const name=p.ident('a function name');p.expectOp('(','Write function name() { }');const params=[];if(!p.accept('op',')')){do{params.push(p.ident('a parameter name'));}while(p.accept('op',','));p.expectOp(')');}
+      prog.functions[name]={params,body:p.block('function')};p.skipSep();continue;}
+    if(k.t==='id'&&(k.v==='every'||k.v==='after')&&p.isOp('(',1)){flush();scene.items.push({k:'event',ev:parseTimer2(p)});p.skipSep();continue;}
+    if(k.t==='id'&&k.v==='if'){flush();p.i++;const st=p.ifStmt();scene.items.push({k:'event',ev:{type:'frame',body:[st],line}});p.skipSep();continue;}
+    if(k.t==='id'&&k.v==='js'&&p.is('raw',undefined,1)){flush();p.i++;const raw=p.next().v;scene.items.push({k:'js',code:raw.split('\n'),line});p.skipSep();continue;}
+    // world.gravity = 1500px/s2; world.size = 2400px 540px;
+    if(k.t==='id'&&k.v==='world'&&p.isOp('.',1)){p.i+=2;const prop=p.ident('a world setting');p.expectOp('=');const value=p.valueList();p.endStmt();
+      const map={gravity:'gravity',size:'world',width:'world_w',height:'world_h'};if(!map[prop])throw E(line,'world has gravity and size. "'+prop+'" isn\'t one of them.');prog.display[map[prop]]=value;continue;}
+    stmts.push(...p.statement());p.skipSep();
+  }
+  flush();return scene;
+}
+function parseTimer2(p){
+  const k=p.next(),line=k.line;p.expectOp('(');
+  if(k.v==='every'&&p.accept('id','frame')){p.expectOp(')');return {type:'frame',body:p.block('every(frame)'),line};}
+  const secs=p.expr();p.expectOp(')');return {type:k.v,secs,body:p.block(k.v),line};
+}
+function parseSprite2(p){
+  const nk=p.peek();const name=p.ident('a sprite name, like sprite Knight { }');const line=nk.line;
+  if(!/^[A-Za-z_]\w*$/.test(name))throw E(line,'Sprite names are one word, like Knight');
+  const def={kind:'sprite',name,file:null,props:[],events:[],init:[],line};
+  if(p.accept('op','(')){const f=p.next();if(f.t!=='str')throw E(line,'Put the image file name in quotes');def.file=f.v;p.expectOp(')');}
+  p.skipNlOnly();
+  if(!p.isOp('{')){p.endStmt();return def;}
+  p.next();p.ctx={self:name};p.skipSep();
+  while(!p.isOp('}')){
+    if(p.is('eof'))throw E(line,'sprite '+name+' { was never closed with }');
+    const k=p.peek(),l=k.line;
+    if(k.t==='ai'){p.i++;p.skipSep();continue;}
+    if(k.t==='id'&&k.v==='if'){p.i++;const st=p.ifStmt();def.events.push({type:'frame',body:[st],line:l});p.skipSep();continue;}
+    if(k.t==='id'&&(k.v==='every'||k.v==='after')&&p.isOp('(',1)){def.events.push(parseTimer2(p));p.skipSep();continue;}
+    if(k.t==='id'&&['sprite','scene','function','sound','music'].includes(k.v))throw E(l,'"'+k.v+'" can\'t go inside a sprite. Close the sprite with } first.');
+    const sts=p.statement();
+    for(const st of sts){
+      if(st.k==='assign2'&&st.op==='='&&st.target.k==='var'&&st.target.name==='self.count'){def.props.push(['count',st.value]);continue;}
+      def.init.push(st);
+    }
+    p.skipSep();
+  }
+  p.next();p.ctx={};return def;
+}
+/* ---- .claV: CSS for games ---- */
+const CSS_PROPS={color:'color',background:'background',shape:'shape',corner:'corner','border-radius':'corner',shadow:'shadow',squash:'squash',trail:'trail',blend:'blend',opacity:'opacity',
+  rotation:'rotation',rotate:'rotation',flip:'flip',layer:'layer','z-index':'layer',parallax:'parallax','repeat-x':'repeat_x',image:'image',frames:'frames',fps:'fps',size:'size',position:'position',
+  content:'text','font-size':'size','font-family':'font','font-weight':'weight',align:'align','text-align':'align','glow-size':'glow_size','outline-width':'outline_width',fixed:'fixed','show-health':'show_health',hidden:'hidden'};
+function stripCssComments(src){
+  let out='',i=0,q=null;
+  while(i<src.length){const c=src[i];
+    if(q){out+=c;if(c==='\\'){out+=src[i+1]||'';i+=2;continue;}if(c===q)q=null;i++;continue;}
+    if(c==='"'||c==="'"){q=c;out+=c;i++;continue;}
+    if(c==='/'&&src[i+1]==='*'){const j=src.indexOf('*/',i+2),end=j<0?src.length:j+2;out+=src.slice(i,end).replace(/[^\n]/g,' ');i=end;continue;}
+    if(c==='/'&&src[i+1]==='/'&&src[i-1]!==':'){while(i<src.length&&src[i]!=='\n'){out+=' ';i++;}continue;}
+    out+=c;i++;}
+  return out;
+}
+function compileView2(src,prog){
+  const s=stripCssComments(src);let i=0;const n=s.length;
+  const lineAt=k=>{let l=1;for(let j=0;j<k&&j<n;j++)if(s.charCodeAt(j)===10)l++;return l;};
+  const ws=()=>{while(i<n){if(/\s/.test(s[i])){i++;continue;}if(s[i]==='?'&&(i===0||s[i-1]==='\n'||/^\s*$/.test(s.slice(s.lastIndexOf('\n',i-1)+1,i)))){while(i<n&&s[i]!=='\n')i++;continue;}break;}};
+  const readUntil=chars=>{let st=i,q=null;while(i<n){const c=s[i];if(q){if(c==='\\'){i+=2;continue;}if(c===q)q=null;i++;continue;}if(c==='"'||c==="'"){q=c;i++;continue;}if(chars.includes(c))break;i++;}return s.slice(st,i);};
+  const parseDecls=(endLine)=>{
+    const decls=[];
+    for(;;){ws();if(i>=n)throw E(endLine,'A { was opened but never closed with }');if(s[i]==='}'){i++;break;}
+      const st=i,line=lineAt(st);const name=readUntil(':;}\n').trim();
+      if(s[i]!==':'){throw E(line,'Settings look like "color: red;". "'+name+'" is missing its ":"');}
+      i++;const val=readUntil(';}').trim();if(s[i]===';')i++;
+      if(!val)throw E(line,'"'+name+'" needs a value after the ":"');
+      decls.push({name,val,line});
+    }
+    return decls;
+  };
+  const items=(sceneName)=>{
+    const out=[];
+    for(;;){ws();if(i>=n)break;if(s[i]==='}'){if(sceneName)break;throw E(lineAt(i),'There\'s an extra } here');}
+      const st=i,line=lineAt(st);const selRaw=readUntil('{;}').trim();
+      if(s[i]!=='{')throw E(line,'Rules look like  #Knight { color: red; }  This one is missing its {');
+      i++;
+      const sm=/^scene\s+"([^"]+)"$/.exec(selRaw);
+      if(sm){if(sceneName)throw E(line,'A scene can\'t be inside another scene.');const inner=items(sm[1]);i++;(prog.viewScenes[sm[1]]=prog.viewScenes[sm[1]]||[]).push(...inner);continue;}
+      if(selRaw==='canvas'){let d=1,j=i;while(j<n&&d>0){if(s[j]==='{')d++;else if(s[j]==='}')d--;if(d>0)j++;}out.push({k:'css',code:[s.slice(i,j)]});i=j+1;continue;}
+      const decls=parseDecls(line);
+      handleRule(selRaw,decls,line,out);
+    }
+    return out;
+  };
+  const cssValue=(d)=>{
+    let toks;try{toks=lex2(d.val).filter(t=>t.t!=='nl');}catch(err){err.clayLine=d.line;if(/character "#"/.test(err.message))err.message='"'+d.val+'" isn\'t a color Clay knows. Colors look like #ff8800 or a name like gold.';throw err;}toks.forEach(t=>t.line=d.line);
+    const p=new P2(toks,{css:true});const parts=[];
+    while(!p.is('eof')){
+      const k=p.peek();
+      if(k.t==='id'&&!p.isOp('(',1)&&!p.isOp('.',1)){p.i++;parts.push({k:'lit',v:k.v==='on'||k.v==='yes'||k.v==='true'?true:k.v==='off'||k.v==='no'||k.v==='false'?false:k.v});}
+      else if(k.t==='op'&&k.v==='#'){p.fail('Colors look like #ff0000');}
+      else if(k.t==='op'&&k.v===','){p.i++;}
+      else parts.push(p.expr());
+    }
+    return parts;
+  };
+  const toDecl=(d)=>{
+    const parts=cssValue(d);const nm=d.name.trim().toLowerCase();
+    const one=parts.length===1?parts[0]:{k:'list',items:parts};
+    if(nm==='glow'){const r=[['glow',parts[0]]];if(parts[1])r.push(['glow_size',parts[1]]);return r;}
+    if(nm==='outline'){const col=parts.find(x=>x.k==='lit'&&typeof x.v==='string'),w=parts.find(x=>x.k==='lit'&&typeof x.v==='number');const r=[];if(col)r.push(['outline',col]);if(w)r.push(['outline_width',w]);if(!r.length)r.push(['outline',one]);return r;}
+    if(nm==='animation'){return [['animation',{k:'range',a:parts[0],b:parts[1]||parts[0]}]];}
+    if(nm==='frames'||nm==='size'||nm==='position')return [[CSS_PROPS[nm],one]];
+    if(nm==='visibility')return [['hidden',{k:'lit',v:parts[0]&&parts[0].v==='hidden'}]];
+    if(nm==='classes'||nm==='class')return [['class',one]];
+    const key=CSS_PROPS[nm]||nm.replace(/-([a-z])/g,(m,c)=>c.toUpperCase());
+    return [[mapProp(key),one]];
+  };
+  const handleRule=(selRaw,decls,line,out)=>{
+    if(selRaw==='display'){for(const d of decls){const nm=d.name.trim().toLowerCase();const parts=cssValue(d);const one=parts.length===1?parts[0]:{k:'list',items:parts};
+      const map={title:'title',size:'size',background:'background',style:'style',light:'light','light-color':'light_color',vignette:'vignette',width:'width',height:'height'};
+      if(!map[nm])throw E(d.line,'display has title, size, background, style, light, light-color and vignette. "'+nm+'" isn\'t one of them.');prog.display[map[nm]]=one;}return;}
+    if(selRaw==='camera'){const props=[];for(const d of decls){const nm=d.name.trim().toLowerCase();if(nm==='follow'){const v=d.val.trim().replace(/^#/,'').replace(/["']/g,'');props.push(['follow',{k:'var',name:v}]);continue;}props.push([nm,cssValue(d)[0]]);}out.push({k:'camera',props,line});return;}
+    const cm=/^(text|sprite)#([A-Za-z_]\w*)$/.exec(selRaw);
+    if(cm){const def={kind:cm[1],name:cm[2],file:null,props:[],events:[],init:[],line};
+      if(cm[1]==='sprite')def.props.push(['type',{k:'lit',v:'object'}]);
+      for(const d of decls)def.props.push(...toDecl(d));
+      prog.templates[def.name]=def;out.push({k:'create',def});return;}
+    for(const one of selRaw.split(',').map(x=>x.trim()).filter(Boolean)){
+      const m=/^(#[A-Za-z_]\w*|\.[A-Za-z_][\w-]*|[A-Za-z_]\w*)(?::([a-z]+))?$/.exec(one);
+      if(!m)throw E(line,'"'+one+'" isn\'t a selector Clay understands. Use #Name, .group or a type like ai');
+      const base=m[1],state=m[2]||null;const sel={state};
+      if(base[0]==='#')sel.id=base.slice(1);else if(base[0]==='.')sel.cls=base.slice(1);else sel.type=base;
+      if(state&&!['hover','hurt','moving','jumping','falling','onground','idle'].includes(state))throw E(line,'":'+state+'" isn\'t a state Clay knows. Try :hover, :hurt, :moving, :jumping, :falling or :idle');
+      const props=[];for(const d of decls)props.push(...toDecl(d));
+      prog.looks.push({sel,spec:(sel.id?100:sel.cls?10:1),props,line});
+    }
+  };
+  return items(null);
+}
+/* ---- language.cla (Clay 2) ---- */
+function compileLanguage2(src){
+  const lang={functions:{},behaviors:{},js:[],aliases:new Map()};
+  ALIASES=new Map();if(!src||!src.trim())return lang;
+  const lines=src.split('\n');
+  lines.forEach((l,ix)=>{const m=/^\s*alias\s+([A-Za-z_]\w*)\s*=\s*(.+?);?\s*$/.exec(l);if(/^\s*alias\b/.test(l)){if(!m)throw E(ix+1,'Write aliases like: alias hp = health;');lang.aliases.set(m[1],lex2(m[2]).filter(t=>t.t!=='nl'&&t.t!=='eof'));}});
+  ALIASES=lang.aliases;
+  const body=lines.map(l=>/^\s*alias\b/.test(l)?'':l).join('\n');
+  const p=new P2(lex2(body),{});p.skipSep();
+  while(!p.is('eof')){
+    const k=p.peek();
+    if(k.t==='ai'){p.i++;p.skipSep();continue;}
+    if(k.t==='id'&&(k.v==='command'||k.v==='function')){p.i++;const name=p.ident('a command name');p.expectOp('(');const params=[];if(!p.accept('op',')')){do{params.push(p.ident());}while(p.accept('op',','));p.expectOp(')');}
+      const body=p.block('command');tagFile(body);lang.functions[name]={params,body};p.skipSep();continue;}
+    if(k.t==='id'&&k.v==='behavior'){p.i++;const name=p.ident('a behavior name');const body=p.block('behavior');tagFile(body);lang.behaviors[name.toLowerCase()]=body;p.skipSep();continue;}
+    if(k.t==='id'&&k.v==='js'&&p.is('raw',undefined,1)){p.i++;lang.js.push({code:p.next().v.split('\n'),line:k.line});p.skipSep();continue;}
+    throw E(k.line,'language.cla holds alias, command, behavior and js. "'+k.v+'" isn\'t one of those.');
+  }
+  return lang;
+}
+function tagAll(o,file){
+  if(Array.isArray(o)){o.forEach(x=>tagAll(x,file));return;}
+  if(!o||typeof o!=='object')return;
+  if(o.k&&o.line!==undefined&&o.file===undefined)o.file=file;
+  for(const key of ['then','else','body','init'])if(o[key])tagAll(o[key],file);
+}
+function compile(src,langSrc,viewSrc){
+  let lang;
+  try{lang=compileLanguage2(langSrc||'');}catch(e){ALIASES=new Map();e.clayFile='language';throw e;}
+  try{
+    ALIASES=lang.aliases;
+    const prog={display:{},templates:{},functions:{},scenes:{},main:{items:[]},looks:[],viewScenes:{},v2:true};
+    let viewMain=[];
+    if(viewSrc&&viewSrc.trim()){try{viewMain=compileView2(viewSrc,prog);}catch(e){e.clayFile='view';throw e;}}
+    try{compileScript2(src||'',prog);}catch(e){if(!e.clayFile)e.clayFile='script';throw e;}
+    prog.main.items.push(...viewMain);
+    for(const name in prog.viewScenes){if(!prog.scenes[name])prog.scenes[name]={items:[]};prog.scenes[name].items.push(...prog.viewScenes[name]);}
+    for(const k in lang.functions)if(!(k in prog.functions))prog.functions[k]=lang.functions[k];
+    prog.behaviors=lang.behaviors;prog.langJs=lang.js;
+    checkCalls(prog,lang);
+    return prog;
+  } finally {ALIASES=new Map();}
+}
+const GLOBAL_FNS=new Set(['play','spawn','goTo','restart','log','stopMusic']);
+function checkCalls(prog,lang){
+  const hasJs=lang.js.length>0||[prog.main,...Object.values(prog.scenes)].some(sc=>sc.items.some(it=>it.k==='js'));
+  if(hasJs)return;
+  const known=n=>BUILTINS[n]||GLOBAL_FNS.has(n)||prog.functions[n];
+  const seen=new Set();
+  const walk=(o,file,line)=>{
+    if(!o||typeof o!=='object'||seen.has(o))return;seen.add(o);
+    if(Array.isArray(o)){o.forEach(x=>walk(x,file,line));return;}
+    const ln=o.line||line;
+    if(o.k==='call'&&!known(o.name)){
+      const all=[...Object.keys(BUILTINS),...GLOBAL_FNS,...Object.keys(prog.functions),'keydown','keypressed','keyreleased'];
+      let best=null,bd=9;for(const c of all){const a=o.name.toLowerCase(),b=c.toLowerCase();const m=a.length,n=b.length;let prev=[...Array(n+1).keys()];for(let i=1;i<=m;i++){const cur=[i];for(let j=1;j<=n;j++)cur[j]=Math.min(prev[j]+1,cur[j-1]+1,prev[j-1]+(a[i-1]===b[j-1]?0:1));prev=cur;}if(prev[n]<bd){bd=prev[n];best=c;}}
+      const e=E(ln,'There\'s no function called "'+o.name+'".'+(bd<=2?' Did you mean '+best+'()?':' Make one with  function '+o.name+'() { }  or check Docs.'));e.clayFile=o.file||file;throw e;
+    }
+    for(const key in o)if(key!=='file')walk(o[key],o.file||file,ln);
+  };
+  walk(prog.main,'script');walk(prog.scenes,'script');walk(Object.values(prog.templates),'script');
+  for(const k in lang.functions)walk(lang.functions[k].body,'language');
+  for(const k in lang.behaviors)walk(lang.behaviors[k],'language');
 }
 
 /* ---------- built-in functions ---------- */
@@ -1128,19 +1546,16 @@ class Game{
       this.applyProp(s,name,v);
       if(name==='text'&&def.kind==='text'){s._textExpr=ast;s.text=fmt(v);s._lastText=s.text;}
     }
-    for(const pass of [0,1])for(const lk of this.prog.looks||[]){
-      const hit=pass===0?(lk.sel!==s.name&&lk.sel===s.type):lk.sel===s.name;
-      if(!hit)continue;
-      for(const [name,ast] of lk.props){
-        const v=(ast.k==='var'&&this.prog.templates[ast.name])?ast.name:this.evalValue(ast,ctx);
-        this.applyProp(s,name,v);
-        if(name==='text'&&def.kind==='text'){s._textExpr=ast;s.text=fmt(v);s._lastText=s.text;}
-      }
-    }
     if(x!==undefined&&x!==null){s.x=num(x,0);s.y=num(y,0);}
-    s._home={x:s.x,y:s.y};s._maxHealth=Math.max(1,num(s.health,1));
     this.sprites.push(s);
     if(def.init.length)this.exec(def.init,ctx);
+    if(x!==undefined&&x!==null){s.x=num(x,0);s.y=num(y,0);}
+    const looks=(this.prog.looks||[]).filter(lk=>this.lookMatches(s,lk.sel));
+    for(const lk of looks.filter(l=>!l.sel.state).sort((p,q)=>p.spec-q.spec)){
+      for(const [name,ast] of lk.props){const v=this.evalValue(ast,ctx);this.applyProp(s,name,v);if(name==='text'&&def.kind==='text'){s._textExpr=ast;s.text=fmt(v);s._lastText=s.text;}}
+    }
+    s._stateLooks=looks.filter(l=>l.sel.state).sort((p,q)=>p.spec-q.spec).map(l=>({state:l.sel.state,vals:l.props.map(([n,a])=>[n,this.evalValue(a,ctx)])}));
+    s._home={x:s.x,y:s.y};s._maxHealth=Math.max(1,num(s.health,1));s._px=s.x;s._py=s.y;
     for(const e of s._events)if(e.ev.type==='start')this.exec(e.ev.body,{self:s,locals:{}});
     return s;
   }
@@ -1157,6 +1572,7 @@ class Game{
       case 'frames':s.frames=Array.isArray(v)?{w:v[0],h:v[1]}:v;break;
       case 'ai.area':s['ai.area']=(v&&typeof v==='object'&&'from' in v)?{x:v}:v;break;
       case 'behavior':s.behavior=Array.isArray(v)?v.map(String):[String(v)];break;
+      case 'class':s.class=Array.isArray(v)?v.map(String):String(v).split(/[\s,]+/).filter(Boolean);break;
       case 'type':s.type=String(v);break;
       default:s[name]=v;
     }
@@ -1171,21 +1587,30 @@ class Game{
       if(name in this.globals)return {found:true,v:this.globals[name]};
       switch(name){case 'dt':return {found:true,v:this.dt};case 'time':return {found:true,v:this.time};case 'mouse':return {found:true,v:this.mouse};case 'camera':return {found:true,v:this.camera};case 'width':return {found:true,v:this.W};case 'height':return {found:true,v:this.H};case 'display':return {found:true,v:{width:this.W,height:this.H,title:this.title}};}
       if(this.prog.templates[name])return {found:true,v:this.first(name)||null};
+      if(this.sounds[name])return {found:true,v:{_sound:name}};
       return {found:false};
     }
     if(s&&name in s)return {found:true,v:s[name]};
     const parts=name.split('.');const r=this.lookup(parts[0],ctx);
     if(!r.found)return {found:false};
+    if(r.v&&r.v._id&&parts.length>2){const flat=parts.slice(1).join('.');if(flat in r.v)return {found:true,v:r.v[flat]};}
+    if(r.v&&r.v._id&&parts.length===2){const pr=parts[1];if(pr==='onGround')return {found:true,v:!!r.v._onGround};if(pr==='canJump')return {found:true,v:!!(r.v._onGround||r.v._coyote>0||this.gravity<=0)};}
     let o=r.v;for(let i=1;i<parts.length;i++){if(o==null)return {found:true,v:null};o=o[parts[i]];}
     return {found:true,v:o===undefined?null:o};
   }
-  getVar(name,ctx){const r=this.lookup(name,ctx);if(r.found)return r.v;return name.indexOf('.')<0?name:null;}
+  getVar(name,ctx,strict){const r=this.lookup(name,ctx);if(r.found)return r.v;
+    if(strict&&name.indexOf('.')<0){if(name==='other')throw new Error('"other" only exists right after a touched(...) or touching(...) check.');throw new Error('"'+name+'" isn\'t defined. Make it first with  let '+name+' = ...;  or put it in quotes if it\'s text.');}
+    return name.indexOf('.')<0?name:null;}
   setVar(name,v,ctx){
     const L=ctx.locals||{},s=ctx.self;
-    if(name.indexOf('.')<0){if(name in L){L[name]=v;return;}if(s&&name in s){s[name]=v;return;}this.globals[name]=v;return;}
+    if(name.indexOf('.')<0){if(name in L){L[name]=v;return;}if(s&&name in s){this.applyProp(s,name,v);return;}if(name in this.globals||!this.prog.v2){this.globals[name]=v;return;}
+      throw new Error('"'+name+'" isn\'t declared yet. Add  let '+name+' = 0;  near the top first.');}
     if(s&&name in s){s[name]=v;return;}
-    const parts=name.split('.');const r=this.lookup(parts.slice(0,-1).join('.'),ctx);
-    if(r.found&&r.v&&typeof r.v==='object'){r.v[parts[parts.length-1]]=v;return;}
+    const parts=name.split('.');
+    {const root=this.lookup(parts[0],ctx);if(root.found&&root.v&&root.v._id&&parts.length>2&&parts[1]==='ai'){this.applyProp(root.v,parts.slice(1).join('.'),v);return;}}
+    const r=this.lookup(parts.slice(0,-1).join('.'),ctx);
+    if(r.found&&r.v&&typeof r.v==='object'){if(r.v._id)this.applyProp(r.v,parts[parts.length-1],v);else r.v[parts[parts.length-1]]=v;return;}
+    if(r.found&&r.v==null)throw new Error('Can\'t set "'+name+'" because "'+parts.slice(0,-1).join('.')+'" doesn\'t exist right now.');
     if(s&&parts[0]==='ai'){s[name]=v;return;}
     throw new Error('Can\'t set "'+name+'" because "'+parts.slice(0,-1).join('.')+'" doesn\'t exist right now.');
   }
@@ -1207,7 +1632,11 @@ class Game{
       case 'touching':return !!(ctx.self&&this.touchingAny(ctx.self,e.name));
       case 'dist':{let t=this.eval(e.to,ctx);if(typeof t==='string')t=this.nearest(t,ctx.self);const s=ctx.self;if(!s||!t)return Infinity;return Math.hypot(t.x-s.x,t.y-s.y);}
       case 'key':return this.keys.has(e.key);
-      case 'var':return this.getVar(e.name,ctx);
+      case 'var':return this.getVar(e.name,ctx,e.strict);
+      case 'nov':{const r=this.lookup(e.name,ctx);if(r.found&&r.v!=null){if(r.v._id&&r.v.name===e.name&&this.prog.templates[e.name])return e.name;return r.v;}return e.name;}
+      case 'keyq':return e.mode==='held'?this.keys.has(e.key):e.mode==='pressed'?this.pressed.has(e.key):this.released.has(e.key);
+      case 'member':{const o=this.eval(e.obj,ctx);if(o==null)return null;if(o._id){if(e.prop==='onGround')return !!o._onGround;if(e.prop==='canJump')return !!(o._onGround||o._coyote>0||this.gravity<=0);}if(Array.isArray(o)&&e.prop==='length')return o.length;const v=o[e.prop];return v===undefined?null:v;}
+      case 'mcall':{const o=this.eval(e.obj,ctx);const args=e.args.map(a=>this.eval(a,ctx));return this.callMethod(o,e.name,args,ctx,e);}
       case 'call':{
         const args=e.args.map(a=>this.eval(a,ctx));
         return this.call(e.name,args,ctx);
@@ -1234,10 +1663,18 @@ class Game{
     if(f){
       if(this.depth>200)throw new Error('Too many function calls inside each other. Is "'+name+'" calling itself forever?');
       this.depth++;const locals={};f.params.forEach((p,i)=>locals[p]=args[i]===undefined?null:args[i]);
-      try{this.exec(f.body,{self:ctx.self,locals});}catch(err){if(err instanceof Ret)return err.v;throw err;}finally{this.depth--;}
+      try{this.exec(f.body,{self:ctx.self,locals,fn:true});}catch(err){if(err instanceof Ret)return err.v;throw err;}finally{this.depth--;}
       return null;
     }
     if(this.jsFns[name])return this.jsFns[name](...args);
+    switch(name){
+      case 'play':this.playSound(fmt(args[0]));return null;
+      case 'spawn':{const nm=args[0]&&args[0]._id?args[0].name:fmt(args[0]);const def=this.prog.templates[nm];if(!def)throw new Error('There\'s nothing called "'+nm+'" to spawn. Make it with  sprite '+nm+' { }  first.');return this.spawn(def,args[1]!=null?num(args[1],0):(ctx.self?ctx.self.x:undefined),args[2]!=null?num(args[2],0):(ctx.self?ctx.self.y:undefined));}
+      case 'goTo':this.pendingScene=fmt(args[0]);return null;
+      case 'restart':this.pendingScene='\u0000main';return null;
+      case 'log':this.log(args.map(fmt).join(' '));return null;
+      case 'stopMusic':this.stopMusic();return null;
+    }
     if(BUILTINS[name])return BUILTINS[name].call(this,args,ctx);
     throw new Error('There\'s no function called "'+name+'". Make one with: function '+name+'()');
   }
@@ -1336,11 +1773,82 @@ class Game{
       case 'after':this.afters.push({t:num(this.eval(st.secs,ctx),1),body:st.body,ctx:{self:s,locals:Object.assign({},ctx.locals)}});return;
       case 'expr':this.eval(st.e,ctx);return;
       case 'ai':return;
+      case 'let':{const v=this.eval(st.value,ctx);if(!ctx.self&&!ctx.fn&&!ctx.frame)this.globals[st.name]=v;else ctx.locals[st.name]=v;return;}
+      case 'assign2':{
+        const t=st.target;let v=this.eval(st.value,ctx);
+        if(st.op!=='='){const o=this.eval(t,ctx);const on=o==null?0:o;
+          if(st.op==='+=')v=(typeof on==='string'||typeof v==='string')?fmt(on)+fmt(v):num(on,0)+num(v,0);else if(st.op==='-=')v=num(on,0)-num(v,0);else if(st.op==='*=')v=num(on,0)*num(v,0);else v=num(v,0)===0?0:num(on,0)/num(v,0);}
+        if(t.k==='var')this.setVar(t.name,v,ctx);
+        else if(t.k==='member'){const o=this.eval(t.obj,ctx);if(o==null)throw new Error('Can\'t set .'+t.prop+' because that thing doesn\'t exist right now.');if(o._id)this.applyProp(o,t.prop,v);else o[t.prop]=v;}
+        else if(t.k==='index'){const o=this.eval(t.a,ctx);if(o==null)throw new Error('That list doesn\'t exist.');o[this.eval(t.idx,ctx)]=v;}
+        return;}
     }
   }
+  callMethod(o,name,args,ctx,e){
+    const fns=this.prog.functions;
+    if(o&&o._sound){if(name==='play'){this.playSound(o._sound);return null;}if(name==='stop'){this.stopMusic();return null;}throw new Error('Sounds can .play() and .stop().');}
+    if(o===this.camera){if(name==='shake'){this.camera.shake=num(args[0],8);this.camera.shakeT=num(args[1],0.3);return null;}if(name==='follow'){this.camera.follow=args[0];return null;}throw new Error('The camera can .shake(10px) and .follow(Knight).');}
+    if(Array.isArray(o)){switch(name){case 'push':case 'add':o.push(...args);return o.length;case 'pop':return o.pop();case 'includes':case 'has':return o.includes(args[0]);case 'indexOf':return o.indexOf(args[0]);
+      case 'remove':{const i=o.indexOf(args[0]);if(i>=0)o.splice(i,1);return o;}case 'random':case 'pick':return o.length?o[Math.floor(Math.random()*o.length)]:null;case 'join':return o.map(fmt).join(args[0]==null?', ':fmt(args[0]));}
+      throw new Error('Lists can .push(), .pop(), .includes(), .indexOf(), .remove(), .random() and .join().');}
+    if(typeof o==='string'){if(this.prog.templates[o]&&this.first(o))o=this.first(o);else{if(name==='upper')return o.toUpperCase();if(name==='lower')return o.toLowerCase();if(name==='includes')return o.includes(fmt(args[0]));throw new Error('"'+o+'" isn\'t a sprite, so it can\'t .'+name+'().');}}
+    if(o==null)throw new Error('Can\'t use .'+name+'() because that sprite doesn\'t exist right now.');
+    if(!o._id)throw new Error('.'+name+'() only works on sprites.');
+    const s=o,c={self:s,locals:{}},L=x=>({k:'lit',v:x});
+    switch(name){
+      case 'walk':{const d=args[0];if(!['left','right','up','down'].includes(d))throw new Error('walk() goes left, right, up or down, like Knight.walk(right).');this.run({k:'move',dir:d},c);return null;}
+      case 'step':this.moveBy(s,num(args[0],0),num(args[1],0));return null;
+      case 'teleport':s.x=num(args[0],s.x);s.y=num(args[1],s.y);s.vx=0;s.vy=0;return null;
+      case 'glide':{const dur=Math.max(0.001,num(args[2],0.5));this.tweens.push({o:s,p:'x',from:s.x,to:num(args[0],s.x),dur,t:0},{o:s,p:'y',from:s.y,to:num(args[1],s.y),dur,t:0});return null;}
+      case 'walkToward':this.run({k:'move',toward:L(args[0]),amount:args[1]!=null?L(args[1]):null},c);return null;
+      case 'walkAwayFrom':this.run({k:'move',toward:L(args[0]),away:true,amount:args[1]!=null?L(args[1]):null},c);return null;
+      case 'jump':this.run({k:'jump',power:args[0]!=null?L(args[0]):null},c);return null;
+      case 'destroy':s._dead=true;return null;
+      case 'hide':s.hidden=true;return null;
+      case 'show':s.hidden=false;return null;
+      case 'say':s._say={text:fmt(args[0]),t:num(args[1],2)};return null;
+      case 'burst':this.run({k:'burst',count:args[0]!=null?L(args[0]):null,color:args[1]!=null?L(args[1]):null,size:args[2]!=null?L(args[2]):null},c);return null;
+      case 'touching':return this.touchCheck(s,args[0],ctx,false);
+      case 'touched':return this.touchCheck(s,args[0],ctx,true);
+      case 'clicked':return !!(this.mouseClicked&&this.pointIn(s,s.fixed===true?this.mouse.screen_x:this.mouse.x,s.fixed===true?this.mouse.screen_y:this.mouse.y));
+      case 'hovered':return this.pointIn(s,s.fixed===true?this.mouse.screen_x:this.mouse.x,s.fixed===true?this.mouse.screen_y:this.mouse.y);
+      case 'landed':return (s._landedF||-9)===this.frame-1;
+      case 'jumped':return (s._jumpedF||-9)===this.frame-1;
+      case 'distanceTo':{let t=args[0];if(typeof t==='string')t=this.nearest(t,s);if(!t)return Infinity;return Math.hypot(t.x-s.x,t.y-s.y);}
+      case 'is':{const q=fmt(args[0]);return this.matches(s,q);}
+    }
+    if(fns[name]){
+      const f=fns[name];if(this.depth>200)throw new Error('Too many commands inside each other.');
+      this.depth++;const locals={};f.params.forEach((p,i)=>locals[p]=args[i]===undefined?null:args[i]);
+      try{this.exec(f.body,{self:s,locals,fn:true});}catch(err){if(err instanceof Ret)return err.v;throw err;}finally{this.depth--;}
+      return null;
+    }
+    const known=['walk','step','teleport','glide','walkToward','walkAwayFrom','jump','destroy','hide','show','say','burst','touching','touched','clicked','landed','jumped','distanceTo'];
+    let best=null,bd=9;for(const k of known){let d=0;const a=name.toLowerCase(),b=k.toLowerCase();if(a===b)continue;const m=a.length,n=b.length;let prev=[...Array(n+1).keys()];for(let i=1;i<=m;i++){const cur=[i];for(let j=1;j<=n;j++)cur[j]=Math.min(prev[j]+1,cur[j-1]+1,prev[j-1]+(a[i-1]===b[j-1]?0:1));prev=cur;}d=prev[n];if(d<bd){bd=d;best=k;}}
+    throw new Error('Sprites don\'t have a .'+name+'() action.'+(bd<=2?' Did you mean .'+best+'()?':' Check Docs for the list.'));
+  }
+  touchCheck(s,target,ctx,edge){
+    let list;
+    if(typeof target==='string')list=this.sprites.filter(o=>o!==s&&!o._dead&&!o.hidden&&o.kind==='sprite'&&this.matches(o,target));
+    else if(target&&target._id)list=[target];else list=[];
+    const hits=list.filter(o=>this.overlaps(s,o,1));
+    if(!edge){if(hits.length){ctx.locals.other=hits[0];return true;}return false;}
+    const key=typeof target==='string'?target:'#'+target._id;s._seen=s._seen||{};const seen=s._seen[key]||(s._seen[key]=new Set());
+    for(const id of [...seen])if(!hits.some(o=>o._id===id))seen.delete(id);
+    const fresh=hits.find(o=>!seen.has(o._id));if(fresh){seen.add(fresh._id);ctx.locals.other=fresh;return true;}return false;
+  }
   resolve(t){return typeof t==='string'?this.first(t):t;}
+  lookMatches(s,q){if(q.id&&q.id!==s.name)return false;if(q.cls&&!this.classesOf(s).includes(q.cls))return false;
+    if(q.type){if(q.type==='sprite'){if(s.kind!=='sprite')return false;}else if(q.type==='text'){if(s.kind!=='text')return false;}else if(s.type!==q.type)return false;}return true;}
+  stateOverrides(s){
+    const on={hover:this.pointIn(s,this.mouse.x,this.mouse.y),hurt:s._hurtT>0,moving:(s._spd||0)>12,jumping:this.gravity>0&&num(s.vy,0)<-5,falling:this.gravity>0&&num(s.vy,0)>5&&!s._onGround,onground:!!s._onGround};
+    on.idle=!on.moving;let ov=null;
+    for(const st of s._stateLooks)if(on[st.state]){ov=ov||{};for(const [n,v] of st.vals)this.applyProp(ov,n,v);}
+    return ov;
+  }
   /* ----- finding sprites ----- */
-  matches(o,name){return o.name===name||o.type===name||name==='anything';}
+  classesOf(s){const c=s.class;return Array.isArray(c)?c.map(String):(c?String(c).split(/[\s,]+/).filter(Boolean):[]);}
+  matches(o,name){if(typeof name!=='string')return false;if(name[0]==='.')return this.classesOf(o).includes(name.slice(1));if(name[0]==='#')return o.name===name.slice(1);return o.name===name||o.type===name||name==='anything';}
   first(name){return this.sprites.find(o=>!o._dead&&o.name===name)||null;}
   all(name){return this.sprites.filter(o=>!o._dead&&this.matches(o,name));}
   nearest(name,s){let best=null,bd=Infinity;for(const o of this.sprites){if(o===s||o._dead||!this.matches(o,name))continue;const d=s?Math.hypot(o.x-s.x,o.y-s.y):0;if(d<bd){bd=d;best=o;}}return best;}
@@ -1367,7 +1875,7 @@ class Game{
     }
   }
   accelOf(s){if(typeof s.accel==='number')return Math.max(0,s.accel);return s.type==='player'&&s.kind==='sprite'?2600:0;}
-  doJump(s,power){s.vy=-power;s._onGround=false;s._coyote=0;s._jumpBuf=0;if(s.squash===true)s._sq=-0.2;this.fireEvent(s,'jumped');}
+  doJump(s,power){s._jumpedF=this.frame;s.vy=-power;s._onGround=false;s._coyote=0;s._jumpBuf=0;if(s.squash===true)s._sq=-0.2;this.fireEvent(s,'jumped');}
   fireEvent(s,type){for(const e of s._events)if(e.ev.type===type&&!s._dead)this.exec(e.ev.body,{self:s,locals:{}});}
   physics(s,dt){
     const g=this.gravity>0&&s.gravity!==false&&(s.type!=='object'||s.gravity===true);
@@ -1387,7 +1895,7 @@ class Game{
       s.vy=Math.min(2200,num(s.vy,0)+this.gravity*dt);this.moveBy(s,0,s.vy*dt);
       if(s._onGround){
         s._coyote=num(s.coyote,0.1);
-        if(!was){if(s.squash===true)s._sq=0.25;this.fireEvent(s,'landed');}
+        if(!was){if(s.squash===true)s._sq=0.25;s._landedF=this.frame;this.fireEvent(s,'landed');}
         if(s._jumpBuf>0&&!s._dead)this.doJump(s,s._jumpPow);
       } else s._coyote=(s._coyote||0)-dt;
       if(s._jumpBuf>0)s._jumpBuf-=dt;
@@ -1483,7 +1991,7 @@ class Game{
   }
   /* ----- frame ----- */
   runEvent(ev,s){
-    const E=ev.ev,ctx={self:s,locals:{}};
+    const E=ev.ev,ctx={self:s,locals:{},frame:true};
     switch(E.type){
       case 'frame':this.exec(E.body,ctx);break;
       case 'every':{ev.t+=this.dt;const secs=Math.max(0.01,num(this.eval(E.secs,ctx),1));let guard=0;while(ev.t>=secs&&guard++<5){ev.t-=secs;this.exec(E.body,ctx);}break;}
@@ -1493,7 +2001,7 @@ class Game{
     }
   }
   step(dt){
-    this.dt=dt;this.time+=dt;
+    this.dt=dt;this.time+=dt;this.frame=(this.frame||0)+1;
     if(this.overlay){
       if(this.pressed.has(' ')||this.pressed.has('Enter')||this.pressed.has('mouse0'))this.goScene('\u0000main');
       this.pressed.clear();this.released.clear();this.mouseClicked=false;return;
@@ -1511,6 +2019,9 @@ class Game{
       this.physics(s,dt);
       if(s.trail){const n=typeof s.trail==='number'?Math.max(1,Math.min(30,s.trail)):6;(s._trail=s._trail||[]).push({x:s.x,y:s.y});while(s._trail.length>n)s._trail.shift();}
       if(s._sq){s._sq*=Math.exp(-14*dt);if(Math.abs(s._sq)<0.004)s._sq=0;}
+      if(typeof s.health==='number'){if(s._lastHealth!==undefined&&s.health<s._lastHealth)s._hurtT=0.3;s._lastHealth=s.health;}
+      if(s._hurtT>0)s._hurtT-=dt;
+      if(dt>0){s._spd=Math.hypot(s.x-s._px,s.y-s._py)/dt;s._px=s.x;s._py=s.y;}
       if(s._say){s._say.t-=dt;if(s._say.t<=0)s._say=null;}
     }
     for(const s of this.sprites.slice()){
@@ -1572,6 +2083,7 @@ class Game{
       String(s.text).split('\n').forEach((ln,i)=>{const yy=s.y+i*sz*1.25;if(s.outline){ctx.lineWidth=num(s.outline_width,3);ctx.strokeStyle=fmt(s.outline===true?'#000':s.outline);ctx.lineJoin='round';ctx.strokeText(ln,s.x,yy);}ctx.fillText(ln,s.x,yy);});
       ctx.restore();return;
     }
+    if(s._stateLooks&&s._stateLooks.length){const ov=this.stateOverrides(s);if(ov){const d=Object.create(s);Object.assign(d,ov);s=d;}}
     const c=this.camera;let ox=0,oy=0;
     if(typeof s.parallax==='number'&&s.fixed!==true){ox=c.x*(1-s.parallax);oy=c.y*(1-s.parallax);}
     if(s.repeat_x===true&&s.w>1){
@@ -1713,7 +2225,7 @@ class Game{
 }
 function start(prog,opts){return new Game(prog,opts).start();}
 function run(src,opts){return start(compile(src,opts&&opts.language,opts&&opts.view),opts);}
-return {compile,start,run,keyCodeFor,BUILTIN_BEHAVIORS};
+return {compile,compileLegacy,legacyTree:buildTree,start,run,keyCodeFor,BUILTIN_BEHAVIORS};
 })();
 </script>
 <script>
@@ -1723,302 +2235,298 @@ return {compile,start,run,keyCodeFor,BUILTIN_BEHAVIORS};
 const $=id=>document.getElementById(id);
 const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
-/* ---------- example games ---------- */
-const PROMPT_EXAMPLE=[
-{name:'Coin Dash',view:`# How Coin Dash looks
+/* ---------- example game (teaches the AI what Clay looks like) ---------- */
+const PROMPT_EXAMPLE=[{name:'Coin Dash',view:`/* How Coin Dash looks */
 
-display
-    title: "Coin Dash"
-    size: 800, 500
-    background: #10182b
-    vignette: 0.35
+display {
+    title: "Coin Dash";
+    size: 800px 500px;
+    background: #10182b;
+    vignette: 35%;
+}
 
-Knight
-    color: #4cc9f0
-    corner: 7
-    shadow: yes
-    squash: yes
+#Knight {
+    color: #4cc9f0;
+    corner: 7px;
+    shadow: on;
+    squash: on;
+}
 
-Coin
-    shape: circle
-    color: gold
-    glow: #ffd166
-    glow_size: 70
+#Coin {
+    shape: circle;
+    color: gold;
+    glow: #ffd166 70px;
+}
 
-Goblin
-    color: #e5484d
-    corner: 8
-    shadow: yes
+.enemy {
+    color: #e5484d;
+    corner: 8px;
+    shadow: on;
+}
 
-create.text("Score")
-    text: "Score {score}"
-    position: 18, 30
-    size: 24
-    color: white
-    shadow: yes
+.enemy:hurt {
+    color: white;
+}
 
-scene "Game Over"
-    create.text("Title")
-        text: "Game over. You got {score} coins"
-        position: 400, 220
-        size: 34
-        align: center
-        color: white
-    create.text("Hint")
-        text: "Press space to play again"
-        position: 400, 280
-        size: 18
-        align: center
-        color: #9aa4b8
-`,script:`# How Coin Dash behaves
-# Click the game, then use the arrow keys
+text#Score {
+    content: "Score {score}";
+    position: 18px 30px;
+    font-size: 24px;
+    color: white;
+    shadow: on;
+}
 
-score = 0
+scene "Game Over" {
+    text#Title {
+        content: "Game over. You got {score} coins";
+        position: 400px 240px;
+        font-size: 34px;
+        align: center;
+        color: white;
+    }
+}
+`,script:`// How Coin Dash behaves
+// Click the game, then use the arrow keys
 
-create.sprite("Knight", "knight.png")
-    sprite.type("player")
-    position: 400, 250
-    size: 28
-    speed: 250
-    health: 3
-    show_health: yes
+let score = 0;
 
-    when right.arrow held → move right
-    when left.arrow held → move left
-    when up.arrow held → move up
-    when down.arrow held → move down
+sprite Knight {
+    Knight.type = player;
+    Knight.position = 400px 250px;
+    Knight.size = 28px;
+    Knight.speed = 250px/s;
+    Knight.health = 3;
+    Knight.showHealth = on;
 
-    when touching Coin
-        score += 1
-        play "Ding"
-        burst count 14 color gold
-        place other at random 40 to 760, random 40 to 460
+    if keydown(right.arrow) { Knight.walk(right); }
+    if keydown(left.arrow) { Knight.walk(left); }
+    if keydown(up.arrow) { Knight.walk(up); }
+    if keydown(down.arrow) { Knight.walk(down); }
 
-    when touching Goblin
-        health -= 1
-        play "Hit"
-        shake camera 10
-        place at 400, 250
-        if health <= 0 → go to "Game Over"
+    if Knight.touched(Coin) {
+        score += 1;
+        play("Ding");
+        Knight.burst(14, "gold");
+        other.teleport(random(40px, 760px), random(40px, 460px));
+    }
 
-create.sprite("Coin", "coin.png")
-    sprite.type("object")
-    count: 4
-    position: random 40 to 760, random 40 to 460
-    size: 16
+    if Knight.touched(Goblin) {
+        Knight.health -= 1;
+        camera.shake(10px);
+        Knight.teleport(400px, 250px);
+        if Knight.health <= 0 { goTo("Game Over"); }
+    }
+}
 
-create.sprite("Goblin", "goblin.png")
-    sprite.type("ai")
-    sprite.behavior("wander", "chase Knight")
-    position: 60, 60
-    size: 30
-    speed: 110
-    ai.sight: 220
-    ai.reaction: 0.4
-    ai.gives_up: 4
+sprite Coin {
+    Coin.type = object;
+    Coin.count = 4;
+    Coin.position = random(40px, 760px), random(40px, 460px);
+    Coin.size = 16px;
+}
 
-create.sound("Ding", "ding.wav")
-create.sound("Hit", "hit.wav")
+sprite Goblin {
+    Goblin.type = ai;
+    Goblin.class = enemy;
+    Goblin.behavior = wander, chase(Knight);
+    Goblin.position = 60px 60px;
+    Goblin.size = 30px;
+    Goblin.speed = 110px/s;
+    Goblin.sight = 220px;
+    Goblin.reaction = 0.4s;
+}
 
-every 12 seconds
-    spawn Goblin at random 0 to 800, 20
-    log "Another goblin appeared!"
+sound Ding = "ding.wav";
 
-scene "Game Over"
-    when space.bar pressed → restart
-`}
-];
-const STARTER_VIEW=`# How My Game looks
+every(12s) {
+    spawn(Goblin, random(0px, 800px), 20px);
+}
 
-display
-    title: "My Game"
-    size: 800, 500
-    background: #14161f
+scene "Game Over" {
+    if keypressed(space.bar) { restart(); }
+}
+`}];
+const STARTER_VIEW=`/* How My Game looks */
 
-Hero
-    color: #e9925a
-    corner: 8
-    shadow: yes
+display {
+    title: "My Game";
+    size: 800px 500px;
+    background: #14161f;
+}
+
+#Hero {
+    color: #e9925a;
+    corner: 8px;
+    shadow: on;
+}
 `;
-const STARTER_SCRIPT=`# How My Game behaves
+const STARTER_SCRIPT=`// How My Game behaves
 
-create.sprite("Hero")
-    sprite.type("player")
-    position: 400, 250
-    size: 32
-    speed: 220
+sprite Hero {
+    Hero.type = player;
+    Hero.position = 400px 250px;
+    Hero.size = 32px;
+    Hero.speed = 220px/s;
 
-    when right.arrow held → move right
-    when left.arrow held → move left
-    when up.arrow held → move up
-    when down.arrow held → move down
+    if keydown(right.arrow) { Hero.walk(right); }
+    if keydown(left.arrow) { Hero.walk(left); }
+    if keydown(up.arrow) { Hero.walk(up); }
+    if keydown(down.arrow) { Hero.walk(down); }
+}
 `;
-const DEFAULT_LANG=`# language.cla changes Clay itself.
-# Everything here works in every project, and the game re-runs as you type.
+const DEFAULT_LANG=`// language.cla changes Clay itself.
+// Everything here works in every project, and the game re-runs as you type.
 
-# alias: give a Clay word your own name.   alias yourword = clayword
-alias teleport = place
-alias hp = health
-alias pew = play "Laser"
+// alias: your own word for a Clay word.   alias yourword = clayword;
+alias hp = health;
+alias zap = burst;
 
-# command: a new command any game can use, like heal(1)
-command heal(amount)
-    health += amount
-    burst count 10 color #5ee27a
-    say "+{amount}"
+// command: a new action any sprite can use, like Knight.heal(1)
+command heal(amount) {
+    this.health += amount;
+    this.burst(10, "#5ee27a");
+    this.say("+{amount}");
+}
 
-# behavior: a new AI behavior, used like sprite.behavior("hop")
-# It runs every frame for each sprite that has it. "target" is the
-# sprite named after it, like sprite.behavior("orbit Hero").
-behavior hop
-    if on ground → jump
+// behavior: a new AI behavior, used like  Goblin.behavior = hop;
+// It runs every frame for each sprite that has it.
+// "target" is the sprite named in it, like  orbit(Hero)
+behavior hop {
+    if this.onGround { this.jump(); }
+}
 
-behavior spin
-    rotation += 180 * dt
+behavior spin {
+    this.rotation += 180deg * dt;
+}
 
-behavior orbit
-    if target
-        move toward target
-        rotation += 120 * dt
+behavior orbit {
+    if target { this.walkToward(target); }
+}
 
-# js: add brand-new functions to Clay with JavaScript
-js
-    game.define("chance", percent => Math.random() * 100 < percent)
+// js: brand-new functions written in JavaScript
+js {
+    game.define("chance", percent => Math.random() * 100 < percent);
+}
 `;
 
 /* ---------- docs ---------- */
 const DOCS=[
- {g:'Files',items:[
-  [`game.claV`,`View file: how things look. display, camera, create.text, css, and look blocks named after a sprite, like Knight.`],
-  [`game.claS`,`Script file: how things behave. create.sprite, events, movement, logic, sounds and scenes.`],
-  [`Knight\n    color: #9be15d\n    glow: #c9f7a0`,`A look block in the .claV file. Every sprite named Knight gets these looks. Use a type name like ai to style all of them.`],
-  [`language.cla`,`Changes Clay itself for every project: your own words, commands, behaviors and JavaScript functions.`]]},
- {g:'Setup',items:[
-  [`display\n    title: "My Game"\n    size: 800, 500`,`Sets up the game screen. width: and height: work too.`],
-  [`background: #14161f`,`Display setting: the background color.`],
-  [`style: pixel`,`Display setting: keeps pixel art crisp.`],
-  [`gravity: 1400`,`Display setting: pulls sprites down for platformers.`],
-  [`world: 2400, 540`,`Display setting: makes the level bigger than the screen. Use it with the camera.`],
-  [`light: 0.5`,`Display setting: darkens the scene (1 is full light). Sprites with glow light it back up.`],
-  [`vignette: 0.4`,`Display setting: darkens the edges of the screen.`],
-  [`camera\n    follow: Knight\n    smooth: 0.1\n    zoom: 1`,`Makes the camera follow a sprite around a big world.`]]},
- {g:'Making things',items:[
-  [`create.sprite("Hero", "hero.png")`,`Makes a sprite. The name needs quotes here. The file name is optional.`],
-  [`create.text("Score")`,`Makes text on the screen. Settings: text:, position:, size:, color:, align:, font:, outline:, shadow:.`],
-  [`create.sound("Ding", "ding.wav")`,`Names a sound. If the file isn't in Assets yet, a built-in sound plays.`],
-  [`create.music("Theme", "theme.mp3")`,`Background music that loops. Settings: volume:, loop:, autoplay:.`],
-  [`count: 5`,`Makes 5 copies at once. count: 0 makes a template you spawn later.`],
-  [`scene "Game Over"`,`A separate screen. It can have parts in both files. Switch with go to "Game Over".`]]},
+ {g:'The two files',items:[
+  [`game.claV`,`How things look. Written like CSS: rules with selectors and { }.`],
+  [`game.claS`,`How things behave. Written like JavaScript: sprites, if checks, actions.`],
+  [`language.cla`,`Changes Clay itself for every project: your own words, commands, behaviors.`]]},
+ {g:'Looks (.claV)',items:[
+  [`display {\n    title: "My Game";\n    size: 800px 500px;\n    background: #14161f;\n}`,`The game screen. Also style: pixel; light: 50%; vignette: 40%;`],
+  [`#Knight {\n    color: #4cc9f0;\n}`,`#Name styles one sprite.`],
+  [`.enemy {\n    glow: #ff4040 60px;\n}`,`.group styles every sprite in that class. A sprite joins with  Goblin.class = enemy;`],
+  [`ai {\n    shadow: on;\n}`,`A type name styles every sprite of that type: player, ai or object.`],
+  [`.enemy:hurt {\n    color: white;\n}`,`States: :hurt :hover :moving :jumping :falling :onground :idle`],
+  [`text#Score {\n    content: "Score {score}";\n    position: 16px 28px;\n    font-size: 24px;\n}`,`Makes text on the screen. {score} shows a value.`],
+  [`sprite#Hills {\n    position: 0px 470px;\n    size: 380px 200px;\n    parallax: 50%;\n    repeat-x: on;\n}`,`Makes a decoration that only exists for looks.`],
+  [`camera {\n    follow: #Knight;\n    smooth: 0.12;\n}`,`The camera follows a sprite around a big world.`],
+  [`canvas {\n    border-radius: 12px;\n}`,`Real CSS for the game screen.`],
+  [`scene "Game Over" {\n    text#Msg { content: "The end"; }\n}`,`Looks that only show in one scene.`]]},
+ {g:'Look settings',items:[
+  [`color: #4cc9f0;`,`Fill color when there's no image. Click the swatch to pick one.`],
+  [`shape: circle;`,`box, circle, triangle or rounded.`],
+  [`corner: 8px;`,`Rounds the corners of a box.`],
+  [`outline: 2px #000000;`,`An outline: width and color.`],
+  [`shadow: on;`,`A soft shadow under it.`],
+  [`glow: #ffd166 120px;`,`A colored glow and how far its light reaches.`],
+  [`squash: on;`,`Squashes when landing, stretches when jumping.`],
+  [`trail: 6;`,`Fading copies behind it as it moves.`],
+  [`blend: add;`,`Adds its color to what's behind it. Good for lasers.`],
+  [`opacity: 50%;`,`See-through. Also rotation: 45deg; flip: on;`],
+  [`layer: 2;`,`Higher layers draw on top.`],
+  [`parallax: 50%;`,`Moves slower than the camera, for backgrounds.`],
+  [`repeat-x: on;`,`Repeats side to side forever.`],
+  [`image: "hero.png";`,`Its picture. frames: 32px 32px; animation: 0 3; fps: 8; plays a sprite sheet.`],
+  [`font-size: 24px;`,`For text. Also font-family, font-weight, align: center;`]]},
+ {g:'Making things (.claS)',items:[
+  [`let score = 0;`,`A variable. Use it anywhere, like  score += 1;`],
+  [`sprite Knight {\n    Knight.type = player;\n}`,`Makes a sprite. Everything about it goes inside its { }.`],
+  [`sprite Knight("knight.png") { }`,`A sprite with a picture from Assets.`],
+  [`sound Ding = "ding.wav";`,`Names a sound. Play it with  play("Ding");`],
+  [`music Theme = "theme.mp3";`,`Background music that loops.`],
+  [`scene "Game Over" {\n    if keypressed(space.bar) { restart(); }\n}`,`A separate screen. Switch with  goTo("Game Over");`],
+  [`function addPoints(n) {\n    score += n;\n}`,`Your own function. Use it like  addPoints(5);`],
+  [`world.gravity = 1500px/s2;`,`Pulls sprites down, for platformers.`],
+  [`world.size = 2400px 540px;`,`A level bigger than the screen.`]]},
  {g:'Sprite settings',items:[
-  [`sprite.type("player")`,`You control it with your own when lines.`],
-  [`sprite.type("ai")`,`It moves by itself using sprite.behavior.`],
-  [`sprite.type("object")`,`Doesn't think or get controlled: coins, walls, spikes, bullets.`],
-  [`position: 100, 200`,`Where its center starts. position: x 100, y 200 works too.`],
-  [`size: 40, 20`,`Width and height. size: 32 makes a square.`],
-  [`speed: 200`,`Pixels per second for move.`],
-  [`jump: 600`,`How hard jump pushes up.`],
-  [`health: 3`,`Any number you like. show_health: yes draws a bar over it.`],
-  [`solid: yes`,`Other sprites can't walk through it. Use it for ground and walls.`],
-  [`gravity: no`,`Turns gravity off for this one sprite.`],
-  [`vx = 200`,`Velocity in pixels per second. Objects keep moving on their own.`],
-  [`bounds: no`,`Lets a player or ai sprite leave the world edges.`],
-  [`my_setting: 10`,`Any label you invent becomes that sprite's own variable.`]]},
- {g:'Movement feel',items:[
-  [`accel: 2600`,`How fast it speeds up. Players get smooth movement by default. accel: 0 makes movement instant.`],
-  [`friction: 1800`,`How fast it slows down when you let go.`],
-  [`coyote: 0.1`,`Seconds you can still jump after running off a ledge.`],
-  [`jump_buffer: 0.12`,`Seconds a jump press is remembered before landing.`],
-  [`when jumps → play "Jump"`,`Runs when this sprite jumps.`],
-  [`when lands → burst count 4`,`Runs when this sprite lands on the ground.`],
-  [`if can jump → say "ready"`,`True when a jump would work right now.`]]},
- {g:'Looks',items:[
-  [`color: #4cc9f0`,`Fill color when there's no image. Click the swatch in the editor to pick a color.`],
-  [`shape: circle`,`box, circle, triangle or rounded.`],
-  [`corner: 8`,`Rounds the corners of a box.`],
-  [`outline: #000000`,`An outline. outline_width: 3 makes it thicker.`],
-  [`shadow: yes`,`A soft shadow under it.`],
-  [`glow: #ffd166`,`A colored glow. glow_size: 120 sets how far its light reaches.`],
-  [`squash: yes`,`Squashes when landing and stretches when jumping.`],
-  [`trail: 6`,`Leaves fading copies behind it as it moves.`],
-  [`blend: add`,`Adds its color to what's behind it, good for lasers and sparks.`],
-  [`opacity: 0.5`,`See-through. rotation: 45 turns it, flip: yes mirrors it.`],
-  [`layer: 2`,`Higher layers draw on top.`],
-  [`parallax: 0.5`,`Moves slower than the camera, for backgrounds. 0 stays still, 1 moves normally.`],
-  [`repeat_x: yes`,`Repeats it side to side forever, for backgrounds.`],
-  [`image: "hero.png"`,`Its picture. frames: 32, 32 with animation: 0 to 3 and fps: 8 plays a sprite sheet.`],
-  [`fixed: yes`,`Stays put on the screen instead of moving with the camera. Text is fixed by default.`]]},
- {g:'AI sprites',items:[
-  [`sprite.behavior("patrol", "chase Hero")`,`Built in: patrol, wander, guard, chase X, flee X, follow X, shoot X, jump over gaps.`],
-  [`ai.sight: 250`,`How far it can see, in pixels.`],
-  [`ai.reaction: 0.4`,`Seconds it waits before reacting.`],
-  [`ai.area: 400 to 800`,`It never leaves this zone. ai.area: x 0 to 800, y 100 to 300 for top-down games.`],
-  [`ai.gives_up: 5`,`Stops chasing after this many seconds, then rests.`],
-  [`ai.patrol: 120`,`How far patrol walks each way from its start.`],
-  [`ai.distance: 60`,`How close follow stays.`],
-  [`ai.bullet: Arrow`,`What shoot spawns. ai.fire_rate: 1.2 is the seconds between shots.`],
-  [`sprite.behavior("? hides behind walls")`,`Describe a custom behavior in plain English. Translate turns it into code.`]]},
- {g:'Events',items:[
-  [`when right.arrow held → move right`,`Runs every frame while the key is down.`],
-  [`when space.bar pressed and on ground → jump`,`Runs once when the key goes down. "and" adds a condition.`],
-  [`when a.key released → log "let go"`,`Runs when the key comes back up.`],
-  [`when touching Coin\n    score += 1\n    destroy other`,`Runs when it starts touching. "other" is the thing it touched.`],
-  [`when clicked → say "hi"`,`Runs when you click this sprite.`],
-  [`when start → log "ready"`,`Runs once when it's created.`],
-  [`every frame\n    rotation += 90 * dt`,`Runs about 60 times a second. dt is the seconds since the last frame.`],
-  [`every 2 seconds\n    spawn Coin at random 0 to 800, 0`,`Runs on a repeating timer.`],
-  [`after 3 seconds\n    say "Go!"`,`Runs once after a delay.`]]},
- {g:'Keys and mouse',items:[
-  [`left.arrow  right.arrow  up.arrow  down.arrow`,`Arrow keys.`],
-  [`space.bar  enter.key  shift.key  escape.key`,`Other keys.`],
-  [`a.key  w.key  1.key`,`Any letter or number key.`],
-  [`mouse.left  mouse.right`,`Mouse buttons. mouse.x and mouse.y are the pointer's position in the world.`],
-  [`if key space.bar → jump`,`Check a key inside other code.`]]},
+  [`Knight.type = player;`,`player (you control it), ai (moves itself) or object (coins, walls, bullets).`],
+  [`Knight.position = 400px 250px;`,`Where its center starts.`],
+  [`Knight.size = 40px 20px;`,`Width and height. One value makes a square.`],
+  [`Knight.speed = 250px/s;`,`How fast walk() goes.`],
+  [`Knight.jumpPower = 600px/s;`,`How hard jump() pushes up.`],
+  [`Knight.health = 3;`,`Any number. Knight.showHealth = on; draws a bar.`],
+  [`Wall.solid = on;`,`Nothing can walk through it. Use it for ground.`],
+  [`Coin.count = 5;`,`Makes 5 copies. count = 0 makes none until you spawn them.`],
+  [`Goblin.class = enemy;`,`Puts it in a group, for .enemy looks and touched(.enemy).`],
+  [`Knight.accel = 2600px/s2;`,`How fast it speeds up. Also friction, coyote, jumpBuffer.`],
+  [`Knight.gravity = off;`,`Turns gravity off for this sprite.`],
+  [`Rock.vy = 200px/s;`,`Velocity. Objects keep moving on their own. Also vx.`],
+  [`Knight.coins = 0;`,`Any name you invent becomes that sprite's own value.`]]},
+ {g:'Checks (if)',items:[
+  [`if keydown(right.arrow) { Knight.walk(right); }`,`True every frame the key is held.`],
+  [`if keypressed(space.bar) { Knight.jump(); }`,`True only the moment the key goes down. Also keyreleased.`],
+  [`if Knight.touched(Coin) {\n    other.destroy();\n}`,`True the moment they start touching. "other" is the one it touched.`],
+  [`if Knight.touching(Lava) { }`,`True the whole time they overlap.`],
+  [`if Knight.touched(.enemy) { }`,`Works with a class too.`],
+  [`if Knight.clicked() { }`,`True when you click it. Also hovered().`],
+  [`if Knight.landed() { }`,`True right after it lands. Also jumped().`],
+  [`if Knight.onGround { }`,`True while standing on something. Also canJump.`],
+  [`if score >= 10 && !won { }`,`Combine with && (and), || (or), ! (not).`],
+  [`if a > b { } else if a == b { } else { }`,`Compare with == != < > <= >=`]]},
+ {g:'Timers',items:[
+  [`every(2s) {\n    spawn(Coin);\n}`,`Repeats forever.`],
+  [`after(3s) {\n    Knight.say("Go!");\n}`,`Runs once after a wait.`],
+  [`every(frame) {\n    Star.rotation += 90deg * dt;\n}`,`Runs every frame. dt is the seconds since the last one.`]]},
  {g:'Actions',items:[
-  [`move right`,`Moves at its speed: left, right, up or down. Add a number to move that many pixels.`],
-  [`move toward Hero`,`Moves toward something. move away from Hero goes the other way.`],
-  [`jump`,`Jumps if it can. jump 800 uses a custom power.`],
-  [`place at 100, 200`,`Teleports. place Coin at 50, 50 moves a different sprite.`],
-  [`spawn Coin at 300, 200`,`Makes a new copy of a sprite.`],
-  [`destroy`,`Removes this sprite. destroy other removes the one it touched.`],
-  [`hide\nshow`,`Makes it invisible, or visible again.`],
-  [`say "Hello" for 2 seconds`,`Shows a speech bubble.`],
-  [`play "Ding"`,`Plays a sound. stop music stops the music.`],
-  [`shake camera 10`,`Shakes the screen.`],
-  [`burst count 20 color gold`,`A particle burst at this sprite. Also size and at.`],
-  [`animate x to 300 in 0.5`,`Smoothly changes a number over time.`],
-  [`go to "Game Over"`,`Switches to a scene. restart starts the whole game over.`],
-  [`log score`,`Prints to the Console.`]]},
+  [`Knight.walk(right);`,`Goes at its speed: left, right, up or down. Smooth for players.`],
+  [`Knight.step(4px, 0px);`,`Moves exactly that far.`],
+  [`Knight.teleport(100px, 200px);`,`Jumps there instantly.`],
+  [`Knight.glide(300px, 200px, 0.5s);`,`Slides there over time.`],
+  [`Goblin.walkToward(Knight);`,`Heads toward something. Also walkAwayFrom().`],
+  [`Knight.jump();`,`Jumps if it can. Knight.jump(800px/s); for a custom power.`],
+  [`Knight.destroy();`,`Removes it. Also hide() and show().`],
+  [`Knight.say("Hello", 2s);`,`A speech bubble.`],
+  [`Knight.burst(20, "gold");`,`A burst of particles: count and color.`],
+  [`Knight.distanceTo(Goblin)`,`How far away something is.`],
+  [`spawn(Coin, 300px, 200px);`,`Makes a new copy.`],
+  [`play("Ding");`,`Plays a sound. Also stopMusic();`],
+  [`camera.shake(10px);`,`Shakes the screen.`],
+  [`goTo("Game Over");`,`Switches scene. restart(); starts over.`],
+  [`log(score);`,`Prints to the Console.`]]},
+ {g:'AI sprites',items:[
+  [`Goblin.behavior = patrol, chase(Knight);`,`Built in: patrol, wander, guard, chase(X), flee(X), follow(X), shoot(X), jumpGaps.`],
+  [`Goblin.sight = 250px;`,`How far it can see.`],
+  [`Goblin.reaction = 0.4s;`,`How long before it reacts.`],
+  [`Goblin.givesUp = 5s;`,`Stops chasing after this long.`],
+  [`Goblin.patrolRange = 120px;`,`How far patrol walks each way.`],
+  [`Goblin.bullet = Arrow;`,`What shoot() fires. Goblin.fireRate = 1.2s;`],
+  [`Goblin.behavior = ? hides behind walls;`,`Describe a behavior in English, then Translate.`]]},
  {g:'Logic and data',items:[
-  [`score = 0`,`Makes or sets a variable. Also += -= *= /=.`],
-  [`if health <= 0 → go to "Game Over"`,`Compare with == != < > <= >=, combine with and, or, not.`],
-  [`if x > 600\n    say "far"\nelse if x > 300\n    say "middle"\nelse\n    say "close"`,`Blocks with else if and else.`],
-  [`repeat 5\n    spawn Coin at random 0 to 800, 100`,`Repeats a block.`],
-  [`while lives > 0\n    lives -= 1`,`Loops while something is true.`],
-  [`for each g in Goblin\n    g.speed += 10`,`Loops over every copy of a sprite, a list, or a range like 1 to 10.`],
-  [`items = ["sword", "key"]`,`Lists. items[0] is the first item.`],
-  [`text: "Score {score}"`,`Put {anything} inside text to show its value.`],
-  [`function heal(amount)\n    health += amount\n    return health`,`Your own commands. Use them like heal(2).`],
-  [`random 1 to 6`,`A random number. Whole numbers give whole results.`],
-  [`self.x   Hero.health   other.color`,`Read or set any sprite's settings. "Hero" with quotes works too.`],
-  [`on ground   touching Spike   distance to Hero`,`Handy checks for if lines.`],
-  [`time   dt   width   height`,`Seconds since start, seconds this frame, and the screen size.`]]},
- {g:'Built-in functions',items:[
-  [`round(x)  floor(x)  ceil(x)  abs(x)  sqrt(x)`,`Math.`],
-  [`min(a, b)  max(a, b)  clamp(v, lo, hi)  lerp(a, b, t)`,`More math.`],
-  [`sin(deg)  cos(deg)  angle(dx, dy)`,`Angles, in degrees.`],
+  [`score += 1;`,`Change a value. Also -= *= /=`],
+  [`let items = ["sword", "key"];`,`Lists. items[0] is the first. items.push("map"); items.length`],
+  [`for (let g of all(Goblin)) {\n    g.speed += 10px/s;\n}`,`Loops over every copy of a sprite or a list.`],
+  [`repeat(5) {\n    spawn(Coin);\n}`,`Repeats a block.`],
+  [`while lives > 0 { }`,`Loops while something is true.`],
+  [`"Score {score}"`,`Put {anything} inside text to show its value.`],
+  [`random(1, 6)`,`A random number. Whole numbers give whole results.`],
   [`count(Goblin)  all(Goblin)  nearest(Goblin)`,`Find sprites.`],
-  [`pick(list)  append(list, v)  remove(list, v)  contains(list, v)`,`Lists.`],
-  [`rgb(255, 120, 0)  hsl(200, 80, 60)`,`Colors.`],
-  [`text(v)  number(v)`,`Convert values.`]]},
+  [`round(x)  abs(x)  min(a, b)  max(a, b)  clamp(v, lo, hi)`,`Math.`],
+  [`time   dt   width   height`,`Seconds since start, seconds this frame, screen size.`]]},
+ {g:'Keys and units',items:[
+  [`right.arrow  space.bar  enter.key  a.key  1.key  mouse.left`,`Key names for keydown(), keypressed() and keyreleased().`],
+  [`px  px/s  px/s2  s  ms  deg  %`,`Units: pixels, speed, acceleration, seconds, milliseconds, degrees, percent.`]]},
  {g:'Your language file',items:[
-  [`alias teleport = place`,`In language.cla: your own word for any Clay word or phrase.`],
-  [`command heal(amount)\n    health += amount`,`In language.cla: a new command every game can use.`],
-  [`behavior hop\n    if on ground → jump`,`In language.cla: a new AI behavior. Use it with sprite.behavior("hop").`],
-  [`js\n    game.define("chance", p => Math.random() * 100 < p)`,`In language.cla: new built-in functions written in JavaScript.`]]},
+  [`alias hp = health;`,`Your own word for a Clay word.`],
+  [`command heal(amount) {\n    this.health += amount;\n}`,`A new action for any sprite: Knight.heal(2);`],
+  [`behavior hop {\n    if this.onGround { this.jump(); }\n}`,`A new AI behavior: Goblin.behavior = hop;`],
+  [`js {\n    game.define("chance", p => Math.random() * 100 < p);\n}`,`New functions written in JavaScript.`]]},
  {g:'Power tools',items:[
-  [`js\n    game.onDrawScreen(ctx => {\n        ctx.fillText("Hi", 10, 20);\n    });`,`Full JavaScript in the .claS file. game has sprites, vars, spawn, find, all, onFrame, onDraw, onDrawScreen, define, key, play, goTo, camera, mouse, ctx and canvas.`],
-  [`css\n    border-radius: 12px;\n    filter: saturate(1.4);`,`Any CSS for the game screen, in the .claV file.`],
-  [`? spawn a boss every 30 seconds`,`An AI line. Write anything in plain English, then click Translate.`]]}
+  [`js {\n    game.onDrawScreen(ctx => {\n        ctx.fillText("Hi", 10, 20);\n    });\n}`,`Full JavaScript in the .claS file. game has sprites, vars, spawn, find, all, onFrame, onDraw, onDrawScreen, define, key, play, camera, mouse and ctx.`],
+  [`? spawn a boss every 30 seconds`,`An AI line. Write anything in English, then Translate.`]]}
 ];
 
 /* ---------- storage ---------- */
@@ -2037,6 +2545,7 @@ if(!store||!Array.isArray(store.projects)){
   }catch(e){}
 }
 if(!store.projects.length)store.projects.push(starterProject());
+const CONVERTED=[];
 if(!store.projects.some(p=>p.id===store.current))store.current=store.projects[0].id;
 if(typeof store.language!=='string')store.language=DEFAULT_LANG;
 let prefs={theme:'auto',live:true,guides:true,fs:13.5,rw:42,ph:38,panel:'coach',coachAuto:false};
@@ -2049,8 +2558,8 @@ function cur(){return store.projects.find(p=>p.id===store.current)||store.projec
 function slug(n){return n.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')||'game';}
 const FILES=['view','script','language'];
 const FILE_INFO={
-  view:{chip:'V',kind:'Clay View',banner:'<b>How things look.</b> display, camera, text, css, and look blocks named after sprites.'},
-  script:{chip:'S',kind:'Clay Script',banner:'<b>How things behave.</b> Sprites, movement, events, logic, sounds and scenes.'},
+  view:{chip:'V',kind:'Clay View (CSS style)',banner:'<b>How things look.</b> display, camera, text, css, and look blocks named after sprites.'},
+  script:{chip:'S',kind:'Clay Script (JS style)',banner:'<b>How things behave.</b> Sprites, movement, events, logic, sounds and scenes.'},
   language:{chip:'L',kind:'Clay Language',banner:'<b>Changes Clay itself</b> for every project: your own words, commands and behaviors. The game re-runs as you type.'}
 };
 function fileName(f){return f==='language'?'language.cla':slug(cur().name)+(f==='view'?'.claV':'.claS');}
@@ -2120,85 +2629,145 @@ function toggleMenu(id,anchor){
 $('projCrumb').onclick=e=>{e.stopPropagation();toggleMenu('projMenu',$('projCrumb'));};
 $('setBtn').onclick=e=>{e.stopPropagation();toggleMenu('setMenu',$('setBtn'));};
 
-/* ---------- vocabulary & highlighting ---------- */
-const KW=new Set('when if else every after repeat while for each in and or not function return scene display camera js css to times held pressed released touching frame seconds second start clicked lands landed jumps jumped at from toward towards away alias command behavior can'.split(' '));
-const ACT=new Set('move jump play place spawn destroy remove say log print go restart shake burst animate hide show stop'.split(' '));
-const LIT=new Set('true false yes no on ground self other target nothing none dt time width height'.split(' '));
-const FN=new Set('random round floor ceil abs sqrt min max sin cos angle clamp lerp count all nearest distance pick append remove contains text number rgb hsl'.split(' '));
+/* ---------- vocabulary & highlighting (Clay 2) ---------- */
+const MAKE_WORDS=new Set(['let','const','sprite','sound','music','scene','function','command','behavior','alias']);
+const CTRL_WORDS=new Set(['if','else','while','for','of','in','repeat','return','every','after','js']);
+const VALUE_WORDS=new Set(['true','false','on','off','null','player','ai','object','left','right','up','down','frame','this','other','target','dt','time','width','height']);
+const SPECIAL_OBJ=new Set(['camera','world']);
+const KEYFNS=new Set(['keydown','keypressed','keyreleased']);
+const FN=new Set(['random','round','floor','ceil','abs','sqrt','min','max','sin','cos','angle','clamp','lerp','count','all','nearest','distance','pick','append','remove','contains','text','number','rgb','hsl','play','spawn','goTo','restart','log','stopMusic']);
+const METHODS=['walk','step','teleport','glide','walkToward','walkAwayFrom','jump','destroy','hide','show','say','burst','touching','touched','clicked','hovered','landed','jumped','distanceTo'];
 const KEY_NAMES=['left.arrow','right.arrow','up.arrow','down.arrow','space.bar','enter.key','shift.key','escape.key','tab.key','backspace.key','control.key','mouse.left','mouse.right',...'abcdefghijklmnopqrstuvwxyz0123456789'.split('').map(c=>c+'.key')];
 const KEYRE=/^((left|right|up|down)\.arrow|space\.bar|(enter|shift|escape|tab|backspace|control)\.key|[a-z0-9]\.key|mouse\.(left|right))$/i;
-const SETTINGS=['position','size','color','shape','corner','outline','outline_width','shadow','glow','glow_size','squash','trail','blend','opacity','rotation','flip','layer','parallax','repeat_x','fixed','image','frames','animation','fps','speed','jump','health','show_health','solid','gravity','bounds','accel','friction','coyote','jump_buffer','count','text','align','font','weight','ai.sight','ai.reaction','ai.area','ai.gives_up','ai.patrol','ai.distance','ai.bullet','ai.fire_rate'];
-const DISPLAY_SETTINGS=['title','size','width','height','background','style','gravity','world','light','light_color','vignette'];
-const LOOK_SETTINGS=['color','shape','corner','outline','outline_width','shadow','glow','glow_size','squash','trail','blend','opacity','rotation','flip','layer','parallax','repeat_x','image','frames','animation','fps','fixed','size','text','font','weight','align','position'];
-const BEHAVIORS=['patrol','wander','guard','chase','flee','follow','shoot','jump over gaps'];
+const SPRITE_PROPS=['type','position','size','speed','jumpPower','health','showHealth','solid','gravity','accel','friction','coyote','jumpBuffer','count','class','behavior','sight','reaction','givesUp','patrolRange','followDistance','bullet','fireRate','area','x','y','vx','vy','rotation','opacity','layer','color','image','hidden','onGround','canJump','bounds','fixed'];
+const CSS_PROP_LIST=['color','shape','corner','outline','shadow','glow','glow-size','squash','trail','blend','opacity','rotation','flip','layer','parallax','repeat-x','image','frames','animation','fps','size','position','content','font-size','font-family','font-weight','align','show-health','visibility'];
+const DISPLAY_PROPS=['title','size','background','style','light','light-color','vignette'];
+const CSS_STATES=['hover','hurt','moving','jumping','falling','onground','idle'];
+const BEHAVIORS=['patrol','wander','guard','chase(','flee(','follow(','shoot(','jumpGaps'];
 let LANG={aliases:new Map(),commands:[],behaviors:[]};
 function parseLang(){
   const src=store.language;const aliases=new Map(),commands=[],behaviors=[];let m;
-  const ra=/^\s*alias\s+([A-Za-z_]\w*)\s*=\s*(.+?)\s*$/gm;while((m=ra.exec(src)))aliases.set(m[1],m[2]);
+  const ra=/^\s*alias\s+([A-Za-z_]\w*)\s*=\s*(.+?);?\s*$/gm;while((m=ra.exec(src)))aliases.set(m[1],m[2]);
   const rc=/^\s*command\s+([A-Za-z_]\w*)\s*(\([^)]*\))?/gm;while((m=rc.exec(src)))commands.push({name:m[1],params:m[2]||'()'});
-  const rb=/^\s*behavior\s+"?([A-Za-z_]\w*)"?/gm;while((m=rb.exec(src)))behaviors.push(m[1]);
+  const rb=/^\s*behavior\s+([A-Za-z_]\w*)/gm;while((m=rb.exec(src)))behaviors.push(m[1]);
   const rj=/game\.define\(\s*["']([A-Za-z_]\w*)["']/g;while((m=rj.exec(src)))commands.push({name:m[1],params:'()',js:true});
   LANG={aliases,commands,behaviors};
 }
 function projectNames(){
-  const both=(cur().script||'')+'\n'+(cur().view||'');const sprites=new Set(),sounds=new Set(),scenes=new Set(),vars=new Set();let m;
-  const r1=/create\.(sprite|text)\(\s*"([^"]+)"/g;while((m=r1.exec(both)))sprites.add(m[2]);
-  const r2=/create\.(sound|music)\(\s*"([^"]+)"/g;while((m=r2.exec(both)))sounds.add(m[2]);
-  const r3=/^\s*scene\s+"([^"]+)"/gm;while((m=r3.exec(both)))scenes.add(m[1]);
-  const r4=/^\s*([a-z_]\w*)\s*=[^=]/gm;while((m=r4.exec(both)))if(!KW.has(m[1]))vars.add(m[1]);
-  return {sprites:[...sprites],sounds:[...sounds],scenes:[...scenes],vars:[...vars]};
+  const S=cur().script||'',Vw=cur().view||'',sprites=new Set(),sounds=new Set(),scenes=new Set(),vars=new Set(),classes=new Set();let m;
+  const r1=/^\s*sprite\s+([A-Za-z_]\w*)/gm;while((m=r1.exec(S)))sprites.add(m[1]);
+  const r1b=/(?:text|sprite)#([A-Za-z_]\w*)/g;while((m=r1b.exec(Vw)))sprites.add(m[1]);
+  const r2=/^\s*(?:sound|music)\s+([A-Za-z_]\w*)/gm;while((m=r2.exec(S)))sounds.add(m[1]);
+  const r3=/^\s*scene\s+"([^"]+)"/gm;while((m=r3.exec(S+'\n'+Vw)))scenes.add(m[1]);
+  const r4=/\b(?:let|const)\s+([A-Za-z_]\w*)/g;while((m=r4.exec(S)))vars.add(m[1]);
+  const r5=/\.class\s*=\s*([^;\n]+)/g;while((m=r5.exec(S)))m[1].split(/[\s,]+/).filter(Boolean).forEach(c=>classes.add(c.replace(/["']/g,'')));
+  const r6=/(?:^|[\s,])\.([A-Za-z_][\w-]*)\s*(?::\w+)?\s*[{,]/gm;while((m=r6.exec(Vw)))classes.add(m[1]);
+  return {sprites:[...sprites],sounds:[...sounds],scenes:[...scenes],vars:[...vars],classes:[...classes]};
 }
-function classOfWord(t,line,end){
-  if(/^(create|sprite|text|sound|music)\./.test(t))return 't-create';
-  if(/^ai\./.test(t))return 't-label';
-  if(KEYRE.test(t))return 't-key';
-  if(KW.has(t))return 't-kw';if(ACT.has(t))return 't-act';if(LIT.has(t))return 't-num';
-  if(line!==undefined&&line[end]==='('&&(FN.has(t)||LANG.commands.some(c=>c.name===t)))return 't-fn';
-  return '';
+let NAMES_CACHE={sprites:[]};
+function classOfWord(t){
+  if(MAKE_WORDS.has(t))return 't-create';if(CTRL_WORDS.has(t))return 't-kw';if(KEYFNS.has(t)||KEYRE.test(t))return 't-key';
+  if(VALUE_WORDS.has(t))return 't-num';if(FN.has(t))return 't-fn';if(METHODS.includes(t))return 't-act';
+  if(SPRITE_PROPS.includes(t))return 't-label';if(NAMES_CACHE.sprites.includes(t))return 't-sel';return '';
 }
 function hlInterp(t){return esc(t).replace(/\{[^}]*\}/g,m=>'<span class="t-interp">'+m+'</span>');}
-function hlLine(line,opts){
-  const q=/^(\s*)(\?.*)$/.exec(line);if(q)return esc(q[1])+'<span class="t-ai">'+esc(q[2])+'</span>';
-  if(opts&&opts.selector)return '<span class="t-sel">'+esc(line)+'</span>';
-  const lm=/^\s*([A-Za-z_][\w.]*)\s*:/.exec(line);const label=lm&&!KW.has(lm[1])&&!ACT.has(lm[1])?lm[1]:null;
-  const re=/("(?:[^"\\]|\\.)*"?|'(?:[^'\\]|\\.)*'?)|(#[0-9a-fA-F]{3,8}\b)|(#.*$|\/\/.*$)|(\d+\.?\d*)|([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)|(→|->|==|!=|<=|>=|\+=|-=|\*=|\/=|[+\-*\/%<>=])/g;
-  let out='',last=0,m,first=true;
-  while((m=re.exec(line))){
-    out+=esc(line.slice(last,m.index));last=re.lastIndex;const t=m[0];let cls;
-    if(m[1]){out+='<span class="t-str">'+hlInterp(t)+'</span>';continue;}
-    if(m[2]||m[4])cls='t-num';else if(m[3])cls='t-com';
-    else if(m[5]){
-      if(first&&label===t)cls=LANG.aliases.has(t)?'t-label t-alias':'t-label';
-      else if(LANG.aliases.has(t)){const tgt=LANG.aliases.get(t);cls=(/^["']/.test(tgt)?'t-str':(classOfWord((/^[A-Za-z_][\w.]*/.exec(tgt)||[''])[0])||'t-id'))+' t-alias';}
-      else cls=classOfWord(t,line,re.lastIndex)||'t-id';
-      first=false;
-    } else cls='t-op';
-    out+='<span class="'+cls+'">'+esc(t)+'</span>';
+const span=(c,t)=>'<span class="'+c+'">'+esc(t)+'</span>';
+/* .claS / language.cla: JavaScript-like */
+function hlScript(line,st){
+  let out='',i=0;const n=line.length;
+  if(st.raw>0){ // inside js { ... }
+    let j=0;for(;j<n;j++){if(line[j]==='{')st.raw++;else if(line[j]==='}'){st.raw--;if(st.raw===0)break;}}
+    if(st.raw>0)return span('t-raw',line);
+    return span('t-raw',line.slice(0,j))+span('t-op','}')+hlScript(line.slice(j+1),st);
   }
-  return out+esc(line.slice(last));
+  if(/^\s*\?/.test(line))return esc(line.match(/^\s*/)[0])+span('t-ai',line.trim());
+  let prev='';
+  while(i<n){
+    if(st.cmt){const j=line.indexOf('*/',i);if(j<0){out+=span('t-com',line.slice(i));return out;}out+=span('t-com',line.slice(i,j+2));i=j+2;st.cmt=false;continue;}
+    const c=line[i],rest=line.slice(i);let m;
+    if(c===' '||c==='\t'){out+=c;i++;continue;}
+    if(rest.startsWith('//')){out+=span('t-com',rest);break;}
+    if(rest.startsWith('/*')){st.cmt=true;continue;}
+    if(c==='?'){out+=span('t-ai',rest);break;}
+    if(c==='"'||c==="'"){let j=i+1;while(j<n&&line[j]!==c){if(line[j]==='\\')j++;j++;}const t=line.slice(i,j+1);out+='<span class="t-str">'+hlInterp(t)+'</span>';i=j+1;prev='str';continue;}
+    if((m=/^#[0-9a-fA-F]{3,8}(?![\w])/.exec(rest))){out+=span('t-num',m[0]);i+=m[0].length;prev='val';continue;}
+    if((m=/^(\d+\.?\d*|\.\d+)(px\/s2|px\/s|px|ms|s|deg|%)?/.exec(rest))&&!/^\.\D/.test(rest)){out+=span('t-num',m[1])+(m[2]?'<span class="t-num t-unit">'+m[2]+'</span>':'');i+=m[0].length;prev='val';continue;}
+    if((m=/^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*/.exec(rest))){
+      const w=m[0];const after=line.slice(i+w.length).match(/^\s*(\(|=(?!=))?/);const call=after&&after[1]==='(';
+      if(KEYRE.test(w)){out+=span('t-key',w);i+=w.length;prev='val';continue;}
+      const segs=w.split('.');
+      segs.forEach((sg,k)=>{
+        if(k>0)out+=span('t-op','.');
+        let cls;
+        if(k===0){
+          if(prev==='dot')cls=call?(METHODS.includes(sg)||LANG.commands.some(c=>c.name===sg)?'t-act':'t-fn'):'t-label';
+          else if(LANG.aliases.has(sg)){const tg=(/^[A-Za-z_]\w*/.exec(LANG.aliases.get(sg))||[''])[0];cls=(classOfWord(tg)||'t-id')+' t-alias';}
+          else if(segs.length>1&&(NAMES_CACHE.sprites.includes(sg)||sg==='this'||sg==='other'||SPECIAL_OBJ.has(sg)))cls='t-sel';
+          else if(call&&segs.length===1)cls=KEYFNS.has(sg)?'t-key':(MAKE_WORDS.has(sg)||CTRL_WORDS.has(sg))?classOfWord(sg):'t-fn';
+          else cls=classOfWord(sg)||'t-id';
+        } else if(k===segs.length-1&&call)cls=METHODS.includes(sg)||LANG.commands.some(c=>c.name===sg)?'t-act':'t-fn';
+        else cls=LANG.aliases.has(sg)?'t-label t-alias':'t-label';
+        out+=span(cls,sg);
+      });
+      i+=w.length;prev='val';
+      if(w==='js'&&/^\s*\{/.test(line.slice(i))){const k2=line.indexOf('{',i);out+=esc(line.slice(i,k2))+span('t-op','{');st.raw=1;return out+hlScript(line.slice(k2+1),st);}
+      continue;}
+    if(c==='.'&&/^\.[A-Za-z_]/.test(rest)&&(prev===''||prev==='op')){const m2=/^\.[A-Za-z_][\w-]*/.exec(rest);out+=span('t-sel',m2[0]);i+=m2[0].length;prev='val';continue;}
+    if(c==='.'){out+=span('t-op','.');i++;prev='dot';continue;}
+    if((m=/^(===|!==|==|!=|<=|>=|&&|\|\||\+=|-=|\*=|\/=|=>|[+\-*\/%<>=!])/.exec(rest))){out+=span('t-op',m[0]);i+=m[0].length;prev='op';continue;}
+    out+=span('t-op',c);i++;prev=c===')'||c===']'?'val':'op';
+  }
+  return out;
 }
-function isSelectorLine(l,file){return file==='view'&&/^"?[A-Za-z_]\w*"?\s*$/.test(l)&&!KW.has(l.trim())&&l.trim()!=='display'&&l.trim()!=='camera'&&l.trim()!=='css';}
-/* plain highlight for docs/help */
-function hlBlock(src){
-  let raw=-1;return src.split('\n').map(l=>{const ind=l.length-l.trimStart().length;
-    if(raw>=0){if(!l.trim()||ind>raw)return '<span class="t-raw">'+esc(l)+'</span>';raw=-1;}
-    if(/^(js|css)$/.test(l.trim()))raw=ind;return hlLine(l);}).join('\n');
+/* .claV: CSS-like */
+function hlView(line,st){
+  let out='',i=0;const n=line.length;
+  if(st.raw>0){let j=0;for(;j<n;j++){if(line[j]==='{')st.raw++;else if(line[j]==='}'){st.raw--;if(st.raw===0)break;}}if(st.raw>0)return span('t-raw',line);return span('t-raw',line.slice(0,j))+span('t-op','}')+hlView(line.slice(j+1),st);}
+  if(/^\s*\?/.test(line))return esc(line.match(/^\s*/)[0])+span('t-ai',line.trim());
+  while(i<n){
+    if(st.cmt){const j=line.indexOf('*/',i);if(j<0){out+=span('t-com',line.slice(i));return out;}out+=span('t-com',line.slice(i,j+2));i=j+2;st.cmt=false;continue;}
+    const c=line[i],rest=line.slice(i);let m;
+    if(c===' '||c==='\t'){out+=c;i++;continue;}
+    if(rest.startsWith('/*')){st.cmt=true;continue;}
+    if(rest.startsWith('//')){out+=span('t-com',rest);break;}
+    if(c==='"'||c==="'"){let j=i+1;while(j<n&&line[j]!==c){if(line[j]==='\\')j++;j++;}out+='<span class="t-str">'+hlInterp(line.slice(i,j+1))+'</span>';i=j+1;continue;}
+    if(c==='{'){out+=span('t-op','{');i++;st.depth++;st.inVal=false;st.sel=false;continue;}
+    if(c==='}'){out+=span('t-op','}');i++;st.depth=Math.max(0,st.depth-1);st.inVal=false;continue;}
+    if(c===';'){out+=span('t-op',';');i++;st.inVal=false;continue;}
+    if(c===':'&&!st.inVal&&st.depth>0&&!st.selLine){out+=span('t-op',':');i++;st.inVal=true;continue;}
+    // selector context: text before a { on this line, or at the top level
+    const braceAhead=line.indexOf('{',i)>=0&&!/:\s*[^{]*;/.test(line.slice(i,line.indexOf('{',i)));
+    if(!st.inVal&&(braceAhead||st.depth===0)){
+      if((m=/^(text|sprite)#[A-Za-z_]\w*/.exec(rest))){const [el,id]=m[0].split('#');out+=span('t-create',el)+span('t-sel','#'+id);i+=m[0].length;continue;}
+      if((m=/^[#.][A-Za-z_][\w-]*/.exec(rest))){out+=span('t-sel',m[0]);i+=m[0].length;continue;}
+      if((m=/^:[a-z]+/.exec(rest))){out+=span('t-kw',m[0]);i+=m[0].length;continue;}
+      if((m=/^(display|camera|canvas|scene)\b/.exec(rest))){out+=span('t-kw',m[0]);i+=m[0].length;if(m[0]==='canvas'&&/^\s*\{/.test(line.slice(i))){const k2=line.indexOf('{',i);out+=esc(line.slice(i,k2))+span('t-op','{');st.raw=1;return out+hlView(line.slice(k2+1),st);}continue;}
+      if((m=/^(player|ai|object|text|sprite)\b/.exec(rest))){out+=span('t-sel',m[0]);i+=m[0].length;continue;}
+    }
+    if(!st.inVal&&(m=/^[A-Za-z_][\w-]*(?=\s*:)/.exec(rest))){out+=span('t-label',m[0]);i+=m[0].length;continue;}
+    if((m=/^#[0-9a-fA-F]{3,8}(?![\w])/.exec(rest))){out+=span('t-num',m[0]);i+=m[0].length;continue;}
+    if((m=/^-?(\d+\.?\d*|\.\d+)(px\/s2|px\/s|px|ms|s|deg|%)?/.exec(rest))){const num=m[0].replace(m[2]||'','');out+=span('t-num',num)+(m[2]?'<span class="t-num t-unit">'+m[2]+'</span>':'');i+=m[0].length;continue;}
+    if((m=/^[A-Za-z_][\w-]*/.exec(rest))){const w=m[0];out+=span(st.inVal?(w==='on'||w==='off'?'t-num':'t-str'):'t-id',w);i+=w.length;continue;}
+    out+=span('t-op',c);i++;
+  }
+  return out;
 }
+function hlLines(lines,file,startState){
+  const st=startState||{cmt:false,raw:0,depth:0,inVal:false};const out=[];
+  for(const l of lines){st.selLine=file==='view'&&l.indexOf('{')>=0&&!/^\s*[\w-]+\s*:/.test(l);out.push(file==='view'?hlView(l,st):hlScript(l,st));st.inVal=false;}
+  return out;
+}
+function hlLine(line){return hlScript(line,{cmt:false,raw:0});}
+function hlBlock(src,file){
+  if(!file){const f=src.trim();file=(/^(display|camera|canvas|text#|sprite#|[#.][A-Za-z]|[a-z-]+\s*:\s*[^=]*;$|(player|ai|object)\s*\{)/.test(f)||(/^scene\s/.test(f)&&/text#|sprite#/.test(f)))?'view':'script';}
+  return hlLines(src.split('\n'),file).join('\n');
+}
+
 
 /* ---------- folding model ---------- */
 const folds={view:new Set(),script:new Set(),language:new Set()};
 let V={lines:[''],map:[0],hidden:{}};
 const indentOf=l=>l.length-l.trimStart().length;
-function blockEnds(lines){
-  const end=new Array(lines.length);const st=[];let last=-1;
-  for(let i=0;i<lines.length;i++){
-    end[i]=i;if(!lines[i].trim())continue;const ind=indentOf(lines[i]);
-    while(st.length&&indentOf(lines[st[st.length-1]])>=ind)end[st.pop()]=last;
-    st.push(i);last=i;
-  }
-  while(st.length)end[st.pop()]=last;
-  return end;
-}
 function buildView(model,fs){
   const lines=model.split('\n'),ends=blockEnds(lines),out=[],map=[],hidden={},valid=new Set();
   for(let i=0;i<lines.length;i++){
@@ -2246,6 +2815,434 @@ function syncModelFromView(){
   if(lost.length){loadView(caretModel());}
 }
 
+
+/* ===== Clay 2 editor pieces ===== */
+function blockEnds(lines){
+  const end=lines.map((_,i)=>i);const st=[];let cmt=false;
+  for(let i=0;i<lines.length;i++){
+    const l=lines[i];let q=null;
+    for(let j=0;j<l.length;j++){
+      const c=l[j];
+      if(cmt){if(c==='*'&&l[j+1]==='/'){cmt=false;j++;}continue;}
+      if(q){if(c==='\\'){j++;continue;}if(c===q)q=null;continue;}
+      if(c==='"'||c==="'"){q=c;continue;}
+      if(c==='/'&&l[j+1]==='/')break;
+      if(c==='/'&&l[j+1]==='*'){cmt=true;j++;continue;}
+      if(/^\s*\?/.test(l))break;
+      if(c==='{')st.push(i);else if(c==='}'){const h=st.pop();if(h!==undefined&&h!==i)end[h]=i;}
+    }
+  }
+  return end;
+}
+const COLOR_KEYS=/^(\s*)(color|glow|outline|background|light-color|shadow)\s*:\s*([a-z]+)\b/i;
+function swatchesIn(l){
+  const out=[];let m;const re=/#[0-9a-fA-F]{3,8}\b/g;
+  const isSelectorLine=/\{\s*$/.test(l)&&!/:/.test(l.split('{')[0]);
+  while((m=re.exec(l))){
+    if(![4,5,7,9].includes(m[0].length))continue;
+    if(isSelectorLine&&l.indexOf(m[0])<l.indexOf('{'))continue;
+    const before=l.slice(0,m.index);if(/[A-Za-z_]$/.test(before)&&!/[\s:("',]$/.test(before))continue;
+    out.push({start:m.index,end:m.index+m[0].length,css:m[0]});
+  }
+  const k=COLOR_KEYS.exec(l);
+  if(k&&!['on','off','yes','no','true','false','add'].includes(k[3].toLowerCase())&&CSS.supports('color',k[3])){const st=l.indexOf(k[3],k[1].length+k[2].length);out.push({start:st,end:st+k[3].length,css:k[3]});}
+  const qs=/"([a-z]+)"/gi;while((m=qs.exec(l))){if(/color|burst/i.test(l)&&CSS.supports('color',m[1])&&!['on','off'].includes(m[1]))out.push({start:m.index+1,end:m.index+1+m[1].length,css:m[1]});}
+  return out;
+}
+function opensBlock(t){return /\{\s*$/.test(t)&&!t.startsWith('?');}
+
+/* ---------- smart autocomplete (Clay 2) ---------- */
+let acState=null;
+const it=(label,insert,desc,cls)=>({label,insert:insert==null?label:insert,desc:desc||'',cls:cls||'t-id'});
+function enclosingHeader(textBefore){
+  const lines=textBefore.split('\n');const st=[];let cmt=false;
+  lines.forEach((l,i)=>{let q=null;for(let j=0;j<l.length;j++){const c=l[j];if(cmt){if(c==='*'&&l[j+1]==='/'){cmt=false;j++;}continue;}if(q){if(c==='\\'){j++;continue;}if(c===q)q=null;continue;}if(c==='"'||c==="'"){q=c;continue;}if(c==='/'&&l[j+1]==='/')break;if(c==='/'&&l[j+1]==='*'){cmt=true;j++;continue;}if(c==='{')st.push(l.slice(0,j).trim());else if(c==='}')st.pop();}});
+  return st;
+}
+function acContext(lineBefore){
+  const names=projectNames();NAMES_CACHE=names;
+  const pos=ta.selectionStart;const textBefore=ta.value.slice(0,pos);
+  const str=/(play|goTo|spawn)\(\s*"([^"]*)$|sprite\s+\w+\(\s*"([^"]*)$|image\s*[:=]\s*"([^"]*)$|(sound|music)\s+\w+\s*=\s*"([^"]*)$/.exec(lineBefore);
+  if(str){
+    const word=str[2]!==undefined?str[2]:str[3]!==undefined?str[3]:str[4]!==undefined?str[4]:str[6]||'';let list;
+    if(str[1]==='play')list=names.sounds.map(x=>it(x,x,'your sound','t-str'));
+    else if(str[1]==='goTo')list=names.scenes.map(x=>it(x,x,'your scene','t-str'));
+    else if(str[1]==='spawn')list=names.sprites.map(x=>it(x,x,'your sprite','t-str'));
+    else list=Object.keys(cur().assets).map(x=>it(x,x,'asset','t-str'));
+    return {word,start:pos-word.length,items:list,strict:true};
+  }
+  if((lineBefore.split('"').length-1)%2===1)return null;
+  // key names inside keydown( ... )
+  let m=/key(?:down|pressed|released)\(\s*([\w.]*)$/.exec(lineBefore);
+  if(m)return {word:m[1],start:pos-m[1].length,items:KEY_NAMES.map(k=>it(k,k+')','key','t-key')),strict:true};
+  // after Name.  →  actions and settings
+  m=/([A-Za-z_]\w*)\.([A-Za-z_]\w*)?$/.exec(lineBefore);
+  if(m&&!KEYRE.test(m[0])){
+    const obj=m[1],word=m[2]||'',start=pos-word.length;
+    if(obj==='camera')return {word,start,items:[it('shake','shake(|);','shake the screen','t-act'),it('follow','follow(|);','follow a sprite','t-act'),it('zoom','zoom = |;','','t-label'),it('smooth','smooth = |;','','t-label')],strict:true};
+    if(obj==='world')return {word,start,items:[it('gravity','gravity = |px/s2;','pull down','t-label'),it('size','size = |px px;','level size','t-label')],strict:true};
+    if(names.sprites.includes(obj)||obj==='this'||obj==='other'||names.vars.includes(obj)){
+      const acts=[...METHODS.map(x=>it(x,x+'(|)','action','t-act')),...LANG.commands.map(c=>it(c.name,c.name+'(|)','your command','t-act'))];
+      const props=SPRITE_PROPS.map(x=>it(x,x+(lineBefore.trim().startsWith(obj)?' = |;':''),'setting','t-label'));
+      return {word,start,items:/^\s*if\b|\(\s*$/.test(lineBefore)?[...acts,...props]:[...props,...acts],strict:true};
+    }
+  }
+  m=(active==='view'?/[#.]?[A-Za-z_][\w-]*$|[#.]$/:/[A-Za-z_][\w-]*$/).exec(lineBefore);const word=m?m[0]:'';
+  const start=pos-word.length,pre=lineBefore.slice(0,lineBefore.length-word.length);
+  const atStart=/^\s*$/.test(pre);
+  const stack=enclosingHeader(textBefore.slice(0,textBefore.length-lineBefore.length));
+  const head=stack[stack.length-1]||'';
+  const spriteItems=names.sprites.map(x=>it(x,x,'your sprite','t-sel'));
+  if(active==='view'){
+    if(/:\s*[^;]*$/.test(lineBefore)&&stack.length){
+      const prop=(/([\w-]+)\s*:[^:]*$/.exec(lineBefore)||[])[1]||'';
+      let vals=[];
+      if(prop==='shape')vals=['box','circle','triangle','rounded'];else if(prop==='blend')vals=['add'];else if(prop==='style')vals=['pixel','smooth'];else if(prop==='align')vals=['left','center','right'];
+      else if(prop==='follow')return {word,start,items:names.sprites.map(x=>it('#'+x,'#'+x+';','your sprite','t-sel')),strict:false};
+      else vals=['on','off'];
+      return {word,start,items:vals.map(v=>it(v,v+';','','t-num')),strict:false};
+    }
+    if(!atStart)return null;
+    if(!stack.length||/^scene\b/.test(head)){
+      return {word,start,items:[
+        ...names.sprites.map(x=>it('#'+x,'#'+x+' {\n    |\n}','style '+x,'t-sel')),
+        ...names.classes.map(x=>it('.'+x,'.'+x+' {\n    |\n}','style the group','t-sel')),
+        it('display','display {\n    |\n}','game screen','t-kw'),it('camera','camera {\n    follow: #|;\n}','camera','t-kw'),
+        it('text#','text#| {\n    content: "";\n    position: 20px 30px;\n}','make text','t-create'),it('sprite#','sprite#| {\n    \n}','decoration','t-create'),
+        it('canvas','canvas {\n    |\n}','CSS for the screen','t-kw'),it('scene','scene "|" {\n    \n}','one scene','t-kw'),
+        it('player','player {\n    |\n}','all players','t-sel'),it('ai','ai {\n    |\n}','all ai sprites','t-sel'),it('object','object {\n    |\n}','all objects','t-sel')
+      ],strict:false};
+    }
+    if(head==='display')return {word,start,items:DISPLAY_PROPS.map(p=>it(p,p+': |;','display','t-label')),strict:false};
+    if(head==='camera')return {word,start,items:['follow','smooth','zoom'].map(p=>it(p,p+': |;','camera','t-label')),strict:false};
+    return {word,start,items:CSS_PROP_LIST.map(p=>it(p,p+': |;','look','t-label')),strict:false};
+  }
+  if(active==='language'&&!stack.length&&atStart)return {word,start,items:[it('alias','alias | = ;','your word','t-create'),it('command','command |() {\n    \n}','new action','t-create'),it('behavior','behavior | {\n    \n}','new AI behavior','t-create'),it('js','js {\n    |\n}','JavaScript','t-kw')],strict:false};
+  if(/\bif\s+$|&&\s*$|\|\|\s*$|!\s*$/.test(pre))return {word,start,items:[it('keydown','keydown(|)','key held','t-key'),it('keypressed','keypressed(|)','key pressed','t-key'),it('keyreleased','keyreleased(|)','key let go','t-key'),...spriteItems,...names.vars.map(v=>it(v,v,'variable','t-id'))],strict:false};
+  if(/\b(touched|touching|walkToward|walkAwayFrom|distanceTo|spawn|count|all|nearest)\(\s*$/.test(pre))return {word,start,items:[...spriteItems,...names.classes.map(c=>it('.'+c,'.'+c,'class','t-sel'))],strict:false};
+  if(/=\s*$/.test(pre)&&/\.behavior\s*=/.test(pre))return {word,start,items:[...BEHAVIORS,...LANG.behaviors].map(b=>it(b.replace('(',''),b.endsWith('(')?b+'|)':b,'behavior','t-fn')),strict:false};
+  if(/\.type\s*=\s*$/.test(pre))return {word,start,items:['player','ai','object'].map(x=>it(x,x+';','type','t-num')),strict:true};
+  const own=[...[...LANG.aliases].map(([a,t])=>it(a,a,'your word → '+t,'t-alias')),...names.vars.map(v=>it(v,v,'variable','t-id'))];
+  const code=[it('if','if | {\n    \n}','check','t-kw'),it('let','let | = ;','variable','t-create'),it('else','else {\n    |\n}','','t-kw'),it('for','for (let | of ) {\n    \n}','loop','t-kw'),it('repeat','repeat(|) {\n    \n}','loop','t-kw'),it('while','while | {\n    \n}','loop','t-kw'),it('return','return |;','','t-kw'),it('after','after(|s) {\n    \n}','delay','t-kw'),
+    it('play','play("|");','sound','t-fn'),it('spawn','spawn(|);','new copy','t-fn'),it('goTo','goTo("|");','scene','t-fn'),it('restart','restart();','','t-fn'),it('log','log(|);','print','t-fn'),it('random','random(|, )','number','t-fn'),it('other','other','touched sprite','t-num'),it('camera','camera','','t-sel'),...[...FN].map(f=>it(f,f+'(|)','function','t-fn'))];
+  if(!atStart)return {word,start,items:[...own,...spriteItems,...code],strict:false};
+  const spr=/^sprite\s+([A-Za-z_]\w*)/.exec(head);
+  if(spr)return {word,start,items:[it(spr[1]+'.',spr[1]+'.','this sprite','t-sel'),...code,it('every','every(|s) {\n    \n}','timer','t-kw'),...own,...spriteItems],strict:false};
+  if(!stack.length||/^scene\b/.test(head))return {word,start,items:[it('sprite','sprite | {\n    \n}','make a sprite','t-create'),it('let','let | = 0;','variable','t-create'),it('sound','sound | = "";','sound','t-create'),it('music','music | = "";','music','t-create'),it('scene','scene "|" {\n    \n}','screen','t-create'),it('function','function |() {\n    \n}','your function','t-create'),it('every','every(|s) {\n    \n}','timer','t-kw'),it('world','world.','gravity, size','t-sel'),it('js','js {\n    |\n}','JavaScript','t-kw'),...code,...spriteItems],strict:false};
+  return {word,start,items:[...code,...own,...spriteItems],strict:false};
+}
+function showAC(){
+  const pos=ta.selectionStart,lineBefore=ta.value.slice(ta.value.lastIndexOf('\n',pos-1)+1,pos);
+  if(/^\s*\?/.test(lineBefore)||/\/\//.test(lineBefore)){hidePops(['ac']);return;}
+  const ctx=acContext(lineBefore);
+  if(!ctx||(!ctx.strict&&ctx.word.length<2)){hidePops(['ac']);return;}
+  const lw=ctx.word.toLowerCase();const seen=new Set();
+  const uniq=ctx.items.filter(i=>{if(seen.has(i.label))return false;seen.add(i.label);return true;});
+  const starts=uniq.filter(i=>i.label.toLowerCase().startsWith(lw)&&i.label!==ctx.word);
+  const has=lw.length>2?uniq.filter(i=>!i.label.toLowerCase().startsWith(lw)&&i.label.toLowerCase().includes(lw)):[];
+  const items=[...starts,...has].slice(0,9);
+  if(!items.length){hidePops(['ac']);return;}
+  acState={items,sel:0,ctx};renderAC();
+  const xy=caretXY(ctx.start);placePop($('ac'),xy.x-10,xy.y+xy.lh+4,xy.y);
+}
+function renderAC(){
+  const box=$('ac');box.innerHTML='';
+  acState.items.forEach((x,i)=>{const d=document.createElement('div');d.className='row'+(i===acState.sel?' on':'');
+    d.innerHTML='<span class="k '+(x.cls||'t-id')+'"></span><span class="lbl '+(x.cls||'')+'">'+esc(x.label)+'</span><small>'+esc(x.desc||'')+'</small>';
+    d.onmousedown=ev=>{ev.preventDefault();acState.sel=i;acceptAC();};box.appendChild(d);});
+  const f=document.createElement('div');f.className='foot';f.innerHTML='<span><kbd>↑</kbd><kbd>↓</kbd> choose</span><span><kbd>Tab</kbd> insert</span><span><kbd>Esc</kbd> close</span>';box.appendChild(f);
+}
+function acceptAC(){
+  const x=acState.items[acState.sel],ctx=acState.ctx;hidePops(['ac']);
+  const ls=ta.value.lastIndexOf('\n',ctx.start-1)+1;const ind=/^\s*/.exec(ta.value.slice(ls,ctx.start))[0];
+  let ins=x.insert.replace(/\n/g,'\n'+ind);const caret=ins.indexOf('|');ins=ins.replace('|','');
+  let endSel=ta.selectionStart;if(ins.endsWith(')')&&ta.value[endSel]===')')endSel++;
+  ta.setSelectionRange(ctx.start,endSel);insertText(ins);
+  if(caret>=0){const p=ctx.start+caret;ta.setSelectionRange(p,p);}
+  if(/\.$/.test(ins))setTimeout(showAC,0);
+}
+
+/* ---------- one-click fixes (Clay 2) ---------- */
+function suggestFix(file,e){
+  const msg=e.message||'',L=(e.clayLine||1)-1,lines=fileText(file).split('\n'),line=lines[L]||'';let m;
+  const names=projectNames();
+  const one=(label,newLine)=>({label,apply:ls=>{ls[L]=newLine;return ls;}});
+  if((m=/missing its closing quote (.)/.exec(msg)))return one('Add the closing '+m[1],line.replace(/\s*$/,'')+m[1]);
+  if((m=/Expected "(\)|\])"/.exec(msg)))return one('Add "'+m[1]+'"',line.replace(/;?\s*$/,'')+m[1]+(/;\s*$/.test(line)?';':''));
+  if((m=/"([^"]+)" isn't a key name/.exec(msg))){const n=nearest(m[1],KEY_NAMES);if(n)return one('Change “'+m[1]+'” to “'+n+'”',line.replace(m[1],n));}
+  if((m=/\.([A-Za-z_]\w*)\(\) action\. Did you mean \.([A-Za-z_]\w*)\(\)/.exec(msg)))return one('Change .'+m[1]+'() to .'+m[2]+'()',line.replace('.'+m[1]+'(','.'+m[2]+'('));
+  if((m=/"([^"]+)" isn't defined/.exec(msg))){
+    const w=m[1];if(CSS.supports('color',w))return one('Put “'+w+'” in quotes',replaceWord(line,w,'"'+w+'"'));
+    const n=nearest(w,[...names.vars,...names.sprites,...names.sounds,...VALUE_WORDS,...FN,'other','this']);
+    if(n&&n!==w)return one('Change “'+w+'” to “'+n+'”',replaceWord(line,w,n));
+    return {label:'Add let '+w+' = 0; at the top',apply:ls=>{let at=0;while(at<ls.length&&(/^\s*(\/\/|$)/.test(ls[at])))at++;ls.splice(at,0,'let '+w+' = 0;');return ls;}};
+  }
+  if((m=/"([^"]+)" isn't declared yet/.exec(msg))){const w=m[1];return {label:'Add let '+w+' = 0; at the top',apply:ls=>{let at=0;while(at<ls.length&&(/^\s*(\/\/|$)/.test(ls[at])))at++;ls.splice(at,0,'let '+w+' = 0;');return ls;}};}
+  if((m=/There's nothing called "([^"]+)" to spawn/.exec(msg))){const n=nearest(m[1],names.sprites);if(n)return one('Change “'+m[1]+'” to “'+n+'”',replaceWord(line,m[1],n));}
+  if((m=/There's no function called "(\w+)"/.exec(msg))){const n=nearest(m[1],[...FN,...LANG.commands.map(c=>c.name),'keydown','keypressed','keyreleased']);if(n)return one('Change “'+m[1]+'” to “'+n+'”',replaceWord(line,m[1],n));}
+  if(/never closed with \}|was opened but never closed/.test(msg))return {label:'Add a } at the end',apply:ls=>{ls.push('}');return ls;}};
+  if(/is missing its ":"/.test(msg)&&(m=/^(\s*)([\w-]+)\s+(.+?);?\s*$/.exec(line)))return one('Add the ":"',m[1]+m[2]+': '+m[3]+';');
+  if(/Put the code for this (if|else|while)/.test(msg)&&!/\{/.test(line))return {label:'Add { } around the next line',apply:ls=>{ls[L]=ls[L].replace(/\s*$/,' {');let nx=L+1;ls.splice(nx+1,0,' '.repeat(indentOf(line))+'}');return ls;}};
+  if(/Each instruction goes on its own line or ends with ;/.test(msg)&&(m=/I didn't expect "([^"]+)"/.exec(msg))){const ix=line.indexOf(m[1],line.search(/\S/)+1);if(ix>0)return one('Add a ; before “'+m[1]+'”',line.slice(0,ix).replace(/\s*$/,'; ')+line.slice(ix));}
+  return null;
+}
+
+/* ---------- coach checks (Clay 2) ---------- */
+const UNIT_HINT={speed:'px/s',jumpPower:'px/s',accel:'px/s2',friction:'px/s2',sight:'px',patrolRange:'px',followDistance:'px',reaction:'s',givesUp:'s',fireRate:'s',coyote:'s',jumpBuffer:'s',position:'px',size:'px',rotation:'deg'};
+function localChecks(){
+  const p=cur(),tips=[];const S=p.script||'',Vw=p.view||'';const LS=S.split('\n'),LV=Vw.split('\n');
+  const add=(kind,text,file,line)=>tips.push({kind,text,file,line,src:'Check'});
+  for(const f of ['view','script','language'])if(marks[f].err&&marks[f].errInfo)add('error','Line '+marks[f].err+' has a problem: '+marks[f].errInfo.message+' Hover the red line for a fix.',f,marks[f].err);
+  const names=projectNames();NAMES_CACHE=names;
+  const ends=blockEnds(LS);const sprites=[];
+  LS.forEach((l,i)=>{const m=/^\s*sprite\s+([A-Za-z_]\w*)\s*(\(\s*"[^"]*"\s*\))?/.exec(l);if(m)sprites.push({name:m[1],line:i+1,block:LS.slice(i,ends[i]+1).join('\n'),hasFile:!!m[2]});});
+  const viewNames=new Set();LV.forEach(l=>{const m=/(?:text|sprite)#([A-Za-z_]\w*)/.exec(l);if(m)viewNames.add(m[1]);});
+  const vEnds=blockEnds(LV);const rules=[];
+  LV.forEach((l,i)=>{const m=/^\s*([^{}]+?)\s*\{/.exec(l);if(!m||/^(display|camera|canvas|scene)\b/.test(m[1]))return;for(const sel of m[1].split(',')){const s=sel.trim();rules.push({sel:s,line:i+1,block:LV.slice(i,vEnds[i]+1).join('\n')});}});
+  const typeOf=b=>((/\.type\s*=\s*(\w+)/.exec(b)||[])[1])||'object';
+  const classOf=b=>(((/\.class\s*=\s*([^;\n]+)/.exec(b)||[])[1])||'').split(/[\s,]+/).filter(Boolean);
+  for(const s of sprites){
+    const t=typeOf(s.block),cls=classOf(s.block);
+    if(t==='player'&&!/key(down|pressed|released)\(/.test(s.block))add('tip','`'+s.name+'` is a player, but no keys control it yet. Try `if keydown(right.arrow)` inside it.','script',s.line);
+    if(t==='ai'&&!/\.behavior\s*=/.test(s.block))add('warn','`'+s.name+'` is an ai sprite with no `behavior`, so it will just stand still.','script',s.line);
+    const styled=rules.some(r=>(r.sel==='#'+s.name||r.sel===t||cls.some(c=>r.sel==='.'+c))&&/(color|image)\s*:/.test(r.block));
+    if(!/\.(color|image)\s*=/.test(s.block)&&!s.hasFile&&!styled)add('tip','`'+s.name+'` has no color or image yet, so it shows up gray. Add a `#'+s.name+' { color: ...; }` rule in the .claV file.','script',s.line);
+    if(/\.count\s*=\s*0\b/.test(s.block)&&!new RegExp('spawn\\(\\s*"?'+s.name+'\\b').test(S)&&!new RegExp('\\.bullet\\s*=\\s*"?'+s.name+'\\b').test(S))add('warn','`'+s.name+'` has `count = 0`, so none appear until something spawns one, but nothing does.','script',s.line);
+    if(!/\.position\s*=/.test(s.block)&&!/\.count\s*=\s*0\b/.test(s.block))add('tip','`'+s.name+'` has no `position`, so it starts in the top-left corner.','script',s.line);
+  }
+  const allNames=new Set([...names.sprites]);
+  for(const r of rules){const m=/^#([A-Za-z_]\w*)/.exec(r.sel);if(m&&!allNames.has(m[1])){const n=nearest(m[1],[...allNames]);add('warn','There\'s a `#'+m[1]+'` rule, but no sprite is named that.'+(n?' Did you mean `#'+n+'`?':''),'view',r.line);}}
+  LS.forEach((l,i)=>{
+    if(/^\s*\/\//.test(l))return;
+    let m;const re=/\.(touched|touching)\(\s*([A-Za-z_]\w*)\s*\)/g;
+    while((m=re.exec(l))){if(!allNames.has(m[2])&&!['player','ai','object'].includes(m[2])){const n=nearest(m[2],[...allNames]);add('warn','Nothing is called `'+m[2]+'`, so this '+m[1]+'() check can never be true.'+(n?' Did you mean `'+n+'`?':''),'script',i+1);}}
+    m=/goTo\(\s*"([^"]+)"/.exec(l);if(m&&!names.scenes.includes(m[1]))add('tip','`goTo("'+m[1]+'")` has no matching `scene "'+m[1]+'"`, so Clay shows a plain screen with that name.','script',i+1);
+    m=/\.(\w+)\s*=\s*(-?\d+\.?\d*)\s*[;\n]?\s*$/.exec(l);if(m&&UNIT_HINT[m[1]]&&m[2]!=='0')add('learn','Add a unit so it\'s clear what the number means: `'+m[2]+UNIT_HINT[m[1]]+'`.','script',i+1);
+  });
+  for(const [f,ls] of [['view',LV],['script',LS]])ls.forEach((l,i)=>{const re=/\{([A-Za-z_]\w*)\}/g;let v;
+    while((v=re.exec(l))){const nm=v[1];if(!/["']/.test(l))continue;if(names.vars.includes(nm)||allNames.has(nm)||['time','dt','width','height'].includes(nm))continue;
+      add('warn','This text shows `{'+nm+'}`, but `'+nm+'` is never made. Add `let '+nm+' = 0;` at the top of the .claS file.',f,i+1);}});
+  if(/world\.gravity\s*=\s*[1-9]/.test(S)&&!/\.solid\s*=\s*(on|true|yes)/.test(S))add('warn','There\'s gravity but nothing is `solid`, so sprites fall to the bottom edge. Add a ground sprite with `Ground.solid = on;`.','script',(LS.findIndex(l=>/world\.gravity/.test(l))+1)||null);
+  const seen=new Set();return tips.filter(t=>{const k=t.text+t.line;if(seen.has(k))return false;seen.add(k);return true;}).slice(0,8);
+}
+
+/* ---------- converting old Clay (indentation style) to Clay 2 ---------- */
+function isLegacy(text){
+  if(!text||!text.trim())return false;
+  if(/\{\s*$/m.test(text))return false;
+  return /^\s*create\.(sprite|text|sound|music)\(/m.test(text)||/^\s*when\s+/m.test(text)||/^display\s*$/m.test(text)||/^\s*sprite\.(type|behavior)\(/m.test(text)||/^[A-Z]\w*\s*$/m.test(text)||/^\s*(command|behavior)\s+\w+.*[^{]\s*$/m.test(text)||/^#\s/m.test(text);
+}
+const OLD_PROP={'ai.sight':'sight','ai.reaction':'reaction','ai.gives_up':'givesUp','ai.patrol':'patrolRange','ai.distance':'followDistance','ai.bullet':'bullet','ai.fire_rate':'fireRate','ai.area':'area','show_health':'showHealth','jump_buffer':'jumpBuffer','glow_size':'glowSize','outline_width':'outlineWidth','repeat_x':'repeatX','jump':'jumpPower'};
+const PROP_UNIT={position:'px',size:'px',speed:'px/s',jumpPower:'px/s',accel:'px/s2',friction:'px/s2',sight:'px',patrolRange:'px',followDistance:'px',glowSize:'px',corner:'px',outlineWidth:'px',reaction:'s',givesUp:'s',coyote:'s',jumpBuffer:'s',fireRate:'s',rotation:'deg'};
+const SELF_PROPS=new Set(['x','y','vx','vy','w','h','health','speed','size','rotation','opacity','color','flip','layer','hidden','type','solid','text']);
+function convValue(v,unit){
+  v=v.trim();
+  let m;
+  if((m=/^x\s+(.+?),\s*y\s+(.+)$/.exec(v))||(m=/^w\s+(.+?),\s*h\s+(.+)$/.exec(v)))return convValue(m[1],unit)+' '+convValue(m[2],unit);
+  if((m=/^x\s+(.+?)\s+to\s+(.+)$/.exec(v)))return convExpr(m[1],null,unit)+' to '+convExpr(m[2],null,unit);
+  if(v.indexOf(',')>0&&!/[("]/.test(v))return v.split(',').map(x=>convValue(x,unit)).join(' ');
+  if(/^random\s/.test(v)&&v.includes(',')&&!v.includes('('))return v.split(/,(?![^(]*\))/).map(x=>convExpr(x,null,unit)).join(', ');
+  return convExpr(v,null,unit);
+}
+function convExpr(s,self,unit){
+  s=s.trim();
+  const parts=s.split(/("(?:[^"\\]|\\.)*")/);
+  return parts.map((p,ix)=>{
+    if(ix%2===1)return p;
+    let t=p;
+    t=t.replace(/\brandom\s+(-?[\w.]+)\s+to\s+(-?[\w.]+)/g,(m,a,b)=>'random('+(unit&&/^-?\d/.test(a)?a+unit:a)+', '+(unit&&/^-?\d/.test(b)?b+unit:b)+')');
+    t=t.replace(/\bon ground\b/g,(self||'this')+'.onGround').replace(/\bcan jump\b/g,(self||'this')+'.canJump');
+    t=t.replace(/\btouching\s+"?(\w+)"?/g,(m,a)=>(self||'this')+'.touching('+a+')');
+    t=t.replace(/\bdistance to\s+(\w+)/g,(m,a)=>(self||'this')+'.distanceTo('+a+')');
+    t=t.replace(/\bkey\s+([\w.]+)/g,'keydown($1)');
+    t=t.replace(/\band\b/g,'&&').replace(/\bor\b/g,'||').replace(/\bnot\s+/g,'!');
+    t=t.replace(/\byes\b/g,'on').replace(/\bno\b/g,'off');
+    if(self)t=t.replace(/(^|[^.\w"])([a-z_]\w*)\b(?!\s*\()/g,(m,pre,w)=>SELF_PROPS.has(w)?pre+self+'.'+w:m);
+    if(unit&&/^-?\d+\.?\d*$/.test(t.trim()))t=t.trim()+unit;
+    return t;
+  }).join('');
+}
+function legacyNodes(src){
+  try{return Clay.legacyTree(src.replace(/\t/g,'    ')).children;}catch(e){return [];}
+}
+function convStmts(nodes,self,ind,decl){
+  const out=[];const pad=' '.repeat(ind);
+  for(const n of nodes){
+    const t=n.text.replace(/\s+#\s.*$/,'');let m;
+    const S=self||'this';
+    const kids=()=>convStmts(n.children,self,ind+4,decl);
+    const inline=(rest)=>convStmts([{text:rest.trim(),children:[]}],self,0,decl).map(x=>x.trim()).join(' ');
+    if(t.startsWith('?')){out.push(pad+t);continue;}
+    if((m=/^if\s+(.+?)\s*(→|->)\s*(.+)$/.exec(t))){out.push(pad+'if '+convExpr(m[1],self)+' { '+inline(m[3])+' }');continue;}
+    if((m=/^else if\s+(.+?)\s*(→|->)\s*(.+)$/.exec(t))){out.push(pad+'else if '+convExpr(m[1],self)+' { '+inline(m[3])+' }');continue;}
+    if((m=/^else\s*(→|->)\s*(.+)$/.exec(t))){out.push(pad+'else { '+inline(m[2])+' }');continue;}
+    if((m=/^if\s+(.+)$/.exec(t))){out.push(pad+'if '+convExpr(m[1],self)+' {',...kids(),pad+'}');continue;}
+    if((m=/^else if\s+(.+)$/.exec(t))){out.push(pad+'else if '+convExpr(m[1],self)+' {',...kids(),pad+'}');continue;}
+    if(t==='else'){out.push(pad+'else {',...kids(),pad+'}');continue;}
+    if((m=/^repeat\s+(.+?)(\s+times)?$/.exec(t))){out.push(pad+'repeat('+convExpr(m[1],self)+') {',...kids(),pad+'}');continue;}
+    if((m=/^while\s+(.+)$/.exec(t))){out.push(pad+'while '+convExpr(m[1],self)+' {',...kids(),pad+'}');continue;}
+    if((m=/^for\s+(?:each\s+)?(\w+)\s+in\s+(.+)$/.exec(t))){const L=/^[A-Z]/.test(m[2].trim())?'all('+m[2].trim()+')':convExpr(m[2],self);out.push(pad+'for (let '+m[1]+' of '+L+') {',...kids(),pad+'}');continue;}
+    if((m=/^after\s+([\d.]+)\s*(seconds?|s)?$/.exec(t))){out.push(pad+'after('+m[1]+'s) {',...kids(),pad+'}');continue;}
+    if((m=/^move\s+(left|right|up|down)\s+(.+)$/.exec(t))){const d={left:['-',0],right:['',0],up:[0,'-'],down:[0,'']}[m[1]];const a=convExpr(m[2],self);out.push(pad+S+'.step('+(d[1]===0?d[0]+a+'px, 0px':'0px, '+d[1]+a+'px')+');');continue;}
+    if((m=/^move\s+(left|right|up|down)$/.exec(t))){out.push(pad+S+'.walk('+m[1]+');');continue;}
+    if((m=/^move\s+towards?\s+(\w+)/.exec(t))){out.push(pad+S+'.walkToward('+m[1]+');');continue;}
+    if((m=/^move\s+away\s+from\s+(\w+)/.exec(t))){out.push(pad+S+'.walkAwayFrom('+m[1]+');');continue;}
+    if((m=/^jump(\s+(.+))?$/.exec(t))){out.push(pad+S+'.jump('+(m[2]?convExpr(m[2],self,'px/s'):'')+');');continue;}
+    if((m=/^shake(\s+camera)?(\s+(.+))?$/.exec(t))){out.push(pad+'camera.shake('+(m[3]?convExpr(m[3],self,'px'):'8px')+');');continue;}
+    if((m=/^play\s+(.+)$/.exec(t))){out.push(pad+'play('+m[1].trim()+');');continue;}
+    if(t==='stop music'){out.push(pad+'stopMusic();');continue;}
+    if((m=/^place\s+(?:(\w+)\s+)?at\s+(.+?),\s*(.+)$/.exec(t))){out.push(pad+(m[1]||S)+'.teleport('+convExpr(m[2],self,'px')+', '+convExpr(m[3],self,'px')+');');continue;}
+    if((m=/^spawn\s+"?(\w+)"?(?:\s+at\s+(.+?),\s*(.+))?$/.exec(t))){out.push(pad+'spawn('+m[1]+(m[2]?', '+convExpr(m[2],self,'px')+', '+convExpr(m[3],self,'px'):'')+');');continue;}
+    if((m=/^(destroy|remove|hide|show)(\s+(\w+))?$/.exec(t))){const v=m[1]==='remove'?'destroy':m[1];out.push(pad+(m[3]&&m[3]!=='self'?m[3]:S)+'.'+v+'();');continue;}
+    if((m=/^say\s+(.+?)(\s+for\s+([\d.]+)\s*(seconds?|s)?)?$/.exec(t))){out.push(pad+S+'.say('+convExpr(m[1],self)+(m[3]?', '+m[3]+'s':'')+');');continue;}
+    if((m=/^(log|print)\s+(.+)$/.exec(t))){out.push(pad+'log('+convExpr(m[2],self)+');');continue;}
+    if((m=/^go to\s+(.+)$/.exec(t))){out.push(pad+'goTo('+m[1].trim()+');');continue;}
+    if(t==='restart'){out.push(pad+'restart();');continue;}
+    if((m=/^burst(.*)$/.exec(t))){const c=(/count\s+(\S+)/.exec(m[1])||[])[1]||'12';let col=(/color\s+(\S+)/.exec(m[1])||[])[1];if(col&&!/^["#]/.test(col)&&!SELF_PROPS.has(col))col='"'+col+'"';else if(col==='color')col=S+'.color';else if(col&&/^#/.test(col))col='"'+col+'"';out.push(pad+S+'.burst('+c+(col?', '+col:'')+');');continue;}
+    if((m=/^return\s*(.*)$/.exec(t))){out.push(pad+'return'+(m[1]?' '+convExpr(m[1],self):'')+';');continue;}
+    if((m=/^animate\s+(\w+)\s+to\s+(.+?)\s+in\s+(.+)$/.exec(t))){out.push(pad+'// '+t+'   (animate isn\'t in Clay 2 yet: try glide)');continue;}
+    if((m=/^([a-z_][\w.]*)\s*(\+=|-=|\*=|\/=|=)\s*(.+)$/i.exec(t))){
+      let name=m[1];const isProp=self&&(SELF_PROPS.has(name)||(decl&&decl.props&&decl.props.has(name)));
+      if(isProp)name=self+'.'+name;
+      else if(!self&&m[2]==='='&&decl&&!decl.vars.has(name)&&name.indexOf('.')<0){decl.vars.add(name);out.push(pad+'let '+name+' = '+convExpr(m[3],self)+';');continue;}
+      out.push(pad+name+' '+m[2]+' '+convExpr(m[3],self)+';');continue;}
+    out.push(pad+convExpr(t,self)+(/\)$/.test(t)?';':''));
+  }
+  return out;
+}
+function convEvent(n,self,ind,decl){
+  const t=n.text;let m;const pad=' '.repeat(ind),S=self||'this';
+  const body=(rest)=>rest?[pad+'    '+convStmts([{text:rest,children:[]}],self,0,decl).join(' ')]:convStmts(n.children,self,ind+4,decl);
+  const arrow=/^(.*?)\s*(?:→|->)\s*(.+)$/.exec(t);const head=arrow?arrow[1]:t,rest=arrow?arrow[2]:null;
+  const wrap=(open)=>rest?[pad+open+' { '+convStmts([{text:rest,children:[]}],self,0,decl).map(x=>x.trim()).join(' ')+' }']:[pad+open+' {',...body(null),pad+'}'];
+  if((m=/^every frame$/.exec(head)))return wrap('every(frame)');
+  if((m=/^every\s+([\d.]+)\s*(seconds?|s)?$/.exec(head)))return wrap('every('+m[1]+'s)');
+  if((m=/^after\s+([\d.]+)\s*(seconds?|s)?$/.exec(head)))return wrap('after('+m[1]+'s)');
+  if((m=/^when\s+(start|created)$/.exec(head)))return rest?convStmts([{text:rest,children:[]}],self,ind,decl):convStmts(n.children,self,ind,decl);
+  if((m=/^when\s+clicked$/.exec(head)))return wrap('if '+S+'.clicked()');
+  if((m=/^when\s+(lands|landed)$/.exec(head)))return wrap('if '+S+'.landed()');
+  if((m=/^when\s+(jumps|jumped)$/.exec(head)))return wrap('if '+S+'.jumped()');
+  if((m=/^when\s+touching\s+"?(\w+)"?(?:\s+and\s+(.+))?$/.exec(head)))return wrap('if '+S+'.touched('+m[1]+')'+(m[2]?' && '+convExpr(m[2],self):''));
+  if((m=/^when\s+([\w.]+)\s*(held|pressed|released)?(?:\s+and\s+(.+))?$/.exec(head))){const fn={held:'keydown',pressed:'keypressed',released:'keyreleased'}[m[2]||'pressed'];return wrap('if '+fn+'('+m[1]+')'+(m[3]?' && '+convExpr(m[3],self):''));}
+  return [pad+'// '+t];
+}
+function convScript(src,ind,viewOut,decl){
+  const out=[];const pad=' '.repeat(ind);decl=decl||{vars:new Set()};
+  for(const n of legacyNodes(src))convScriptNode(n,ind,out,viewOut,decl);
+  return out;
+}
+function convScriptNode(n,ind,out,viewOut,decl){
+  const t=n.text,pad=' '.repeat(ind);let m;
+  if(/^#/.test(t)||!t.trim())return;
+  if(t.startsWith('?')){out.push(pad+t);return;}
+  if(t==='display'){for(const c of n.children){const mm=/^([\w.]+)\s*:\s*(.+)$/.exec(c.text);if(!mm)continue;
+    if(mm[1]==='gravity')out.push(pad+'world.gravity = '+mm[2].trim()+'px/s2;');else if(mm[1]==='world')out.push(pad+'world.size = '+convValue(mm[2],'px')+';');else viewOut.display.push(c);}return;}
+  if(t==='camera'){viewOut.camera.push(...n.children);return;}
+  if((m=/^create\.(sound|music)\(\s*"([^"]+)"\s*(?:,\s*"([^"]+)")?\s*\)/.exec(t))){out.push(pad+m[1]+' '+m[2]+' = "'+(m[3]||'')+'";');return;}
+  if((m=/^create\.text\(/.exec(t))){viewOut.texts.push({n,ind});return;}
+  if((m=/^create\.sprite\(\s*"([^"]+)"\s*(?:,\s*"([^"]+)")?\s*\)/.exec(t))){
+    const name=m[1].replace(/\W/g,'');const props=new Set();
+    for(const c of n.children){const pm=/^([a-z_][\w.]*)\s*:/i.exec(c.text);if(pm)props.add(pm[1]);}
+    const d={vars:decl.vars,props};
+    if(out.length&&out[out.length-1].trim())out.push('');
+    out.push(pad+'sprite '+name+(m[2]?'("'+m[2]+'")':'')+' {');
+    for(const c of n.children){
+      const ct=c.text;let k;
+      if(ct.startsWith('?')){out.push(pad+'    '+ct);continue;}
+      if((k=/^sprite\.type\(\s*"(\w+)"\s*\)/.exec(ct))){out.push(pad+'    '+name+'.type = '+k[1]+';');continue;}
+      if((k=/^sprite\.behavior\((.*)\)\s*$/.exec(ct))){const bs=(k[1].match(/"[^"]*"/g)||[]).map(x=>x.slice(1,-1).trim()).map(b=>{if(b.startsWith('?'))return b;const w=b.split(/\s+/);if(/^jump/.test(w[0]))return 'jumpGaps';return w.length>1?w[0]+'('+w.slice(1).join(' ')+')':w[0];});
+        if(bs.some(b=>b.startsWith('?')))out.push(pad+'    '+name+'.behavior = '+bs.filter(b=>!b.startsWith('?')).join(', ')+(bs.filter(b=>!b.startsWith('?')).length?', ':'')+bs.find(b=>b.startsWith('?'))+';');
+        else out.push(pad+'    '+name+'.behavior = '+bs.join(', ')+';');continue;}
+      if((k=/^([a-z_][\w.]*)\s*:\s*(.+)$/i.exec(ct))){const np=OLD_PROP[k[1]]||k[1];let v=convValue(k[2],PROP_UNIT[np]);
+        if(np==='color'&&/^[a-z]+$/i.test(v))v='"'+v+'"';if(np==='shape'||np==='blend')v='"'+v+'"';if(np==='class')v=k[2].trim();
+        out.push(pad+'    '+name+'.'+np+' = '+v+';');continue;}
+      if(/^(when|every|after)\b/.test(ct)){const ev=convEvent(c,name,ind+4,d);const lastLine=out[out.length-1]||'';if(ev.length>1||/^\s*\w+\.\w+\s*=/.test(lastLine))if(lastLine.trim())out.push('');out.push(...ev);continue;}
+      out.push(...convStmts([c],name,ind+4,d));
+    }
+    out.push(pad+'}','');return;
+  }
+  if((m=/^scene\s+"([^"]+)"/.exec(t))){if(out.length&&out[out.length-1].trim())out.push('');const sub={display:[],camera:[],texts:[],looks:[],scenes:{}};out.push(pad+'scene "'+m[1]+'" {');for(const c of n.children)convScriptNode(c,ind+4,out,sub,decl);out.push(pad+'}','');if(sub.texts.length)(viewOut.sceneTexts[m[1]]=viewOut.sceneTexts[m[1]]||[]).push(...sub.texts);return;}
+  if((m=/^function\s+(\w+)\s*(\(.*\))?/.exec(t))){out.push(pad+'function '+m[1]+(m[2]||'()')+' {',...convStmts(n.children,null,ind+4,{vars:new Set(),props:new Set()}),pad+'}','');return;}
+  if(t==='js'){out.push(pad+'js {',...(n.rawBody||[]).map(l=>pad+'    '+l),pad+'}');return;}
+  if(t==='css'){viewOut.css.push(...(n.rawBody||[]));return;}
+  if(/^(when|every|after)\b/.test(t)){if(out.length&&out[out.length-1].trim())out.push('');out.push(...convEvent(n,null,ind,decl));return;}
+  out.push(...convStmts([n],null,ind,decl));
+}
+const VIEW_PROP={glow_size:'glow-size',outline_width:'outline-width',repeat_x:'repeat-x',show_health:'show-health',light_color:'light-color',text:'content',size:'size',font:'font-family',weight:'font-weight'};
+function cssVal(k,v,isText){
+  v=v.trim();let m;
+  if((m=/^x\s+(.+?),\s*y\s+(.+)$/.exec(v))||(m=/^w\s+(.+?),\s*h\s+(.+)$/.exec(v)))return cssVal(k,m[1])+' '+cssVal(k,m[2]);
+  if(/^\d/.test(v)&&v.includes(',')&&!v.includes('('))return v.split(',').map(x=>cssVal(k,x)).join(' ');
+  if(v==='yes')return 'on';if(v==='no')return 'off';
+  if((m=/^([\d.]+)\s+to\s+([\d.]+)$/.exec(v)))return m[1]+' '+m[2];
+  if(/^-?[\d.]+$/.test(v)){
+    if(['light','vignette','parallax','opacity'].includes(k))return Math.round(parseFloat(v)*100)+'%';
+    if(['corner','glow_size','outline_width','size','position','width','height','frames'].includes(k))return v+'px';
+    if(k==='rotation')return v+'deg';
+  }
+  return v;
+}
+function convDecls(children,pad,isText){
+  const out=[];
+  for(const c of children){const m=/^([\w.]+)\s*:\s*(.+)$/.exec(c.text);if(!m){if(c.text.startsWith('?'))out.push(pad+c.text);continue;}
+    if(m[1]==='count'||m[1]==='type')continue;
+    const k=m[1],name=(isText&&k==='size')?'font-size':(VIEW_PROP[k]||k.replace(/_/g,'-'));
+    out.push(pad+name+': '+cssVal(k,m[2],isText)+';');}
+  return out;
+}
+function convView(src,extra){
+  const out=[];const nodes=legacyNodes(src);
+  const disp=[...extra.display];const cam=[...extra.camera];const texts=[];const css=[...extra.css];const scenes={};
+  const looks=[];const decor=[];
+  for(const n of nodes){
+    const t=n.text;let m;
+    if(t.startsWith('?')){looks.push(t);continue;}
+    if(/^#/.test(t))continue;
+    if(t==='display'){disp.push(...n.children);continue;}
+    if(t==='camera'){cam.push(...n.children);continue;}
+    if(t==='css'){css.push(...(n.rawBody||[]));continue;}
+    if((m=/^create\.text\(\s*"([^"]+)"/.exec(t))){texts.push('text#'+m[1].replace(/\W/g,'')+' {',...convDecls(n.children,'    ',true),'}','');continue;}
+    if((m=/^create\.sprite\(\s*"([^"]+)"/.exec(t))){decor.push('sprite#'+m[1].replace(/\W/g,'')+' {',...convDecls(n.children,'    ',false),'}','');continue;}
+    if((m=/^scene\s+"([^"]+)"/.exec(t))){const inner=[];for(const c of n.children){const mm=/^create\.text\(\s*"([^"]+)"/.exec(c.text);if(mm)inner.push('    text#'+mm[1].replace(/\W/g,'')+' {',...convDecls(c.children,'        ',true),'    }');}scenes[m[1]]=(scenes[m[1]]||[]).concat(inner);continue;}
+    if(/^"?[A-Za-z_]\w*"?$/.test(t)){const nm=t.replace(/"/g,'');const sel=['player','ai','object'].includes(nm)?nm:'#'+nm;looks.push(sel+' {',...convDecls(n.children,'    ',false),'}','');continue;}
+  }
+  for(const tx of extra.texts){const mm=/^create\.text\(\s*"([^"]+)"/.exec(tx.n.text);texts.push('text#'+mm[1].replace(/\W/g,'')+' {',...convDecls(tx.n.children,'    ',true),'}','');}
+  for(const sn in extra.sceneTexts){for(const tx of extra.sceneTexts[sn]){const mm=/^create\.text\(\s*"([^"]+)"/.exec(tx.n.text);(scenes[sn]=scenes[sn]||[]).push('    text#'+mm[1].replace(/\W/g,'')+' {',...convDecls(tx.n.children,'        ',true),'    }');}}
+  out.push('/* How this game looks */','');
+  if(disp.length)out.push('display {',...convDecls(disp,'    ',false),'}','');
+  out.push(...decor,...looks);
+  if(cam.length){out.push('camera {');for(const c of cam){const m=/^(\w+)\s*:\s*(.+)$/.exec(c.text);if(m)out.push('    '+m[1]+': '+(m[1]==='follow'?'#'+m[2].trim().replace(/"/g,''):m[2].trim())+';');}out.push('}','');}
+  out.push(...texts);
+  if(css.length)out.push('canvas {',...css.map(l=>'    '+l),'}','');
+  for(const sn in scenes)out.push('scene "'+sn+'" {',...scenes[sn],'}','');
+  return out.join('\n').replace(/\n{3,}/g,'\n\n');
+}
+function convertProject(p){
+  const viewOut={display:[],camera:[],texts:[],css:[],sceneTexts:{}};
+  const legacyScript=isLegacy(p.script),legacyView=isLegacy(p.view);
+  if(!legacyScript&&!legacyView)return false;
+  const script=legacyScript?['// How this game behaves (converted to the new Clay)','',...convScript(p.script||'',0,viewOut)].join('\n').replace(/\n{3,}/g,'\n\n'):p.script;
+  const view=legacyView||viewOut.display.length||viewOut.texts.length?convView(legacyView?p.view:'',viewOut)+(legacyView?'':'\n'+(p.view||'')):p.view;
+  p.legacy={view:p.view,script:p.script};p.view=view;p.script=script.replace(/\s*$/,'\n');return true;
+}
+function convertLanguage(src){
+  if(!isLegacy(src))return null;
+  const out=['// language.cla (converted to the new Clay)',''];
+  for(const n of legacyNodes(src)){
+    const t=n.text;let m;
+    if(/^#/.test(t))continue;
+    if((m=/^alias\s+(\w+)\s*=\s*(.+)$/.exec(t))){
+      const OLDWORD={place:'teleport',move:'walk',destroy:'destroy',say:'say',burst:'burst',jump:'jump'};
+      const name=m[1],tgt=OLDWORD[m[2].trim()]||m[2].trim();
+      if(METHODS.includes(name)||FN.has(name)||MAKE_WORDS.has(name)||CTRL_WORDS.has(name)||name===tgt){out.push('// alias '+name+' = '+m[2].trim()+'   (not needed: Clay has '+name+' built in now)');continue;}
+      out.push('alias '+name+' = '+tgt+';');continue;}
+    if((m=/^(command|function)\s+(\w+)\s*(\(.*\))?/.exec(t))){out.push('','command '+m[2]+(m[3]||'()')+' {',...convStmts(n.children,'this',4,{vars:new Set(),props:new Set()}),'}');continue;}
+    if((m=/^behavior\s+"?(\w+)"?/.exec(t))){out.push('','behavior '+m[1]+' {',...convStmts(n.children,'this',4,{vars:new Set(),props:new Set()}),'}');continue;}
+    if(t==='js'){out.push('','js {',...(n.rawBody||[]).map(l=>'    '+l),'}');continue;}
+  }
+  return out.join('\n')+'\n';
+}
+
 /* ---------- editor rendering ---------- */
 const ta=$('code'),hl=$('hl'),gutter=$('gutter'),deco=$('decoIn'),canvas=$('game'),preview=$('preview');
 const marks={view:{err:null,errInfo:null,added:new Set()},script:{err:null,errInfo:null,added:new Set()},language:{err:null,errInfo:null,added:new Set()}};
@@ -2271,16 +3268,15 @@ function refresh(){
   let agLevel=-1,agFrom=-1,agTo=-1;
   if(prefs.guides){const cm=V.map[curRow]||0;const ci=model[cm]&&model[cm].trim()?indentOf(model[cm]):Infinity;
     for(let i=cm-1;i>=0;i--){if(model[i].trim()&&indentOf(model[i])<ci&&ends[i]>=cm){agLevel=Math.floor(indentOf(model[i])/4);agFrom=i+1;agTo=ends[i];break;}}}
-  let raw=-1,h='<div class="hl-inner">',g='',d='';const mt=metrics();
+  let h='<div class="hl-inner">',g='',d='';const mt=metrics();NAMES_CACHE=projectNames();
+  const bodies=hlLines(lines.map(l=>l.slice(indentOf(l))),active);
   for(let r=0;r<lines.length;r++){
     const l=lines[r],ml=V.map[r],ind=indentOf(l);
     const c=(r===errRow?' err':mk.added.has(ml+1)?' add':'')+(r===curRow?' cur':'');
     let lvl=lv[r]<0?-lv[r]-1:lv[r];if(l.trim())lvl=Math.min(lvl,Math.floor(ind/4));
     let pre='';for(let k=0;k<lvl;k++)pre+='<span class="ig'+(k===agLevel&&ml>=agFrom&&ml<=agTo?' on':'')+'">    </span>';
     const restLead=l.trim()?l.slice(lvl*4,ind):'';const body=l.slice(ind);
-    let html;
-    if(raw>=0&&(!l.trim()||ind>raw))html='<span class="t-raw">'+esc(restLead+body)+'</span>';
-    else{raw=-1;if(/^(js|css)$/.test(l.trim()))raw=ind;html=esc(restLead)+hlLine(body,{selector:ind===0&&isSelectorLine(l,active)});}
+    const html=esc(restLead)+bodies[r];
     h+='<div class="ln'+c+'">'+pre+html+'</div>';
     const isHead=ends[ml]>ml,closed=!!V.hidden[r];
     g+='<div class="gn'+c+'" data-r="'+r+'">'+(ml+1)+(isHead?'<span class="fold'+(closed?' closed':'')+'" data-ml="'+ml+'" title="'+(closed?'Unfold':'Fold')+' block">'+FOLD_SVG+'</span>':'')+'</div>';
@@ -2291,14 +3287,6 @@ function refresh(){
   }
   hl.innerHTML=h+'</div>';gutter.innerHTML=g;deco.innerHTML=d;
   syncScroll();updateStatusPos();updateAiBtn();updateTabErrs();
-}
-const COLOR_KEYS=/^(\s*)(color|glow|outline|background|light_color|shadow)\s*:\s*(.+?)\s*$/;
-function swatchesIn(l){
-  const out=[];let m;const re=/#[0-9a-fA-F]{3,8}\b/g;
-  while((m=re.exec(l))){const before=l.slice(0,m.index);if((before.split('"').length-1)%2===1&&!/"#[0-9a-fA-F]+"/.test(l.slice(m.index-1,m.index+m[0].length+1)))continue;if([4,5,7,9].includes(m[0].length))out.push({start:m.index,end:m.index+m[0].length,css:m[0]});}
-  const k=COLOR_KEYS.exec(l);
-  if(k&&/^[a-z]+$/i.test(k[3])&&!['yes','no','true','false','add'].includes(k[3])&&CSS.supports('color',k[3])){const st=l.indexOf(k[3],k[1].length+k[2].length);out.push({start:st,end:st+k[3].length,css:k[3]});}
-  return out;
 }
 function updateCurLine(){
   const r=rowAt(ta.selectionStart);if(r===curRow){updateStatusPos();return;}
@@ -2371,8 +3359,9 @@ function fit(){
 }
 new ResizeObserver(()=>{fit();moveIndicator();MT=null;}).observe(preview);
 function stopGame(){if(game){game.stop();game=null;}}
-function aiLines(code){const out=[];code.split('\n').forEach((l,i)=>{if(/^\s*\?/.test(l)||/behavior\([^)]*["']\s*\?/.test(l))out.push(i+1);});return out;}
+function aiLines(code){const out=[];code.split('\n').forEach((l,i)=>{if(/^\s*\?/.test(l)||/behavior\s*=[^;\n]*\?/.test(l))out.push(i+1);});return out;}
 function run(){
+  clearTimeout(liveT);
   const p=cur();FILES.forEach(f=>{marks[f].err=null;marks[f].errInfo=null;});
   let prog;
   try{prog=Clay.compile(p.script||'',store.language,p.view||'');}catch(e){clearConsole();showError(e);renderCoach();return;}
@@ -2399,11 +3388,6 @@ function insertText(text){
   try{ok=document.execCommand('insertText',false,text);}catch(e){ok=false;}
   if(!ok){ta.setRangeText(text,ta.selectionStart,ta.selectionEnd,'end');ta.dispatchEvent(new Event('input'));}
   programmatic=false;
-}
-function opensBlock(t){
-  if(!t||t.includes('→')||t.includes('->')||t.startsWith('?'))return false;
-  if(active==='view'&&/^"?[A-Za-z_]\w*"?$/.test(t))return true;
-  return /^(display|camera|js|css)$/.test(t)||/^create\.\w+\(.*\)$/.test(t)||/^(when|every|after|if|else|repeat|while|for|function|scene|command|behavior)\b/.test(t);
 }
 const PAIRS={'"':'"','(':')','[':']','{':'}'};
 ta.addEventListener('beforeinput',e=>{
@@ -2437,8 +3421,9 @@ ta.addEventListener('keydown',e=>{
   }
   if(e.key==='Enter'&&!e.isComposing&&!e.shiftKey){
     e.preventDefault();
-    const pos=ta.selectionStart,ls=ta.value.lastIndexOf('\n',pos-1)+1,line=ta.value.slice(ls,pos);
-    insertText('\n'+/^\s*/.exec(line)[0]+(opensBlock(line.trim())?'    ':''));return;
+    const pos=ta.selectionStart,ls=ta.value.lastIndexOf('\n',pos-1)+1,line=ta.value.slice(ls,pos);const ind=/^\s*/.exec(line)[0];
+    if(opensBlock(line.trim())&&ta.value[pos]==='}'&&ta.selectionStart===ta.selectionEnd){insertText('\n'+ind+'    \n'+ind);const p2=pos+1+ind.length+4;ta.setSelectionRange(p2,p2);return;}
+    insertText('\n'+ind+(opensBlock(line.trim())?'    ':''));return;
   }
   // auto-close quotes and brackets
   const s=ta.selectionStart,en=ta.selectionEnd,v=ta.value;
@@ -2452,6 +3437,7 @@ ta.addEventListener('keydown',e=>{
     e.preventDefault();insertText(e.key+PAIRS[e.key]);ta.setSelectionRange(s+1,s+1);return;
   }
   if([')',']','}'].includes(e.key)&&v[s]===e.key&&s===en){e.preventDefault();ta.setSelectionRange(s+1,s+1);return;}
+  if(e.key==='}'&&s===en){const ls=v.lastIndexOf('\n',s-1)+1;const before=v.slice(ls,s);if(/^\s{4,}$/.test(before)){e.preventDefault();ta.setSelectionRange(s-4,s);insertText('}');return;}}
   if(e.key==='Backspace'&&s===en&&s>0&&PAIRS[v[s-1]]&&v[s]===PAIRS[v[s-1]]){e.preventDefault();ta.setSelectionRange(s-1,s+1);programmatic=true;try{document.execCommand('delete');}catch(err){}programmatic=false;return;}
 });
 function toggleFoldAtRow(r){
@@ -2486,131 +3472,10 @@ document.addEventListener('mousedown',e=>{
   for(const id of ['ctxMenu','helpCard','colorPop','projMenu','setMenu'])if(!$(id).hidden&&!$(id).contains(e.target)&&!e.target.closest('.sw')&&!e.target.closest('#projCrumb,#setBtn'))$(id).hidden=true;
 });
 
-/* ---------- smart autocomplete ---------- */
-const AC_BASE=[
- ['display','display\n    title: "|"\n    size: 800, 500','game screen','top','t-kw'],
- ['camera','camera\n    follow: |','follow a sprite','top','t-kw'],
- ['create.sprite','create.sprite("|")','make a sprite','top','t-create'],['create.text','create.text("|")','text on screen','top view','t-create'],
- ['create.sound','create.sound("|", "")','a sound','top','t-create'],['create.music','create.music("|", "")','looping music','top','t-create'],
- ['scene','scene "|"','separate screen','top view','t-kw'],['function','function |()','your own command','top','t-kw'],
- ['js','js\n    |','JavaScript block','top','t-kw'],['css','css\n    |','CSS for the screen','view','t-kw'],
- ['sprite.type','sprite.type("|")','player, ai or object','sprite','t-create'],['sprite.behavior','sprite.behavior("|")','how an ai acts','sprite','t-create'],
- ['when','when | pressed → ','key event','sprite top','t-kw'],['when touching','when touching |','collision','sprite','t-kw'],['when clicked','when clicked → |','','sprite','t-kw'],
- ['when start','when start → |','','sprite top','t-kw'],['when jumps','when jumps → |','','sprite','t-kw'],['when lands','when lands → |','','sprite','t-kw'],
- ['every frame','every frame\n    |','60 times a second','sprite top','t-kw'],['every seconds','every | seconds','timer','sprite top','t-kw'],['after seconds','after | seconds','delay','sprite top code','t-kw'],
- ['move left','move left','','code','t-act'],['move right','move right','','code','t-act'],['move up','move up','','code','t-act'],['move down','move down','','code','t-act'],
- ['move toward','move toward |','','code','t-act'],['move away from','move away from |','','code','t-act'],['jump','jump','','code','t-act'],
- ['place at','place at |, ','teleport','code','t-act'],['spawn','spawn | at , ','new copy','code top','t-act'],['destroy','destroy','','code','t-act'],['destroy other','destroy other','','code','t-act'],
- ['hide','hide','','code','t-act'],['show','show','','code','t-act'],['say','say "|"','speech bubble','code','t-act'],['play','play "|"','sound','code','t-act'],['stop music','stop music','','code','t-act'],
- ['shake camera','shake camera |','','code','t-act'],['burst','burst count | color ','particles','code','t-act'],['animate','animate | to  in ','tween','code','t-act'],
- ['go to','go to "|"','switch scene','code','t-act'],['restart','restart','','code','t-act'],['log','log |','print','code top','t-act'],
- ['if','if | → ','','code top','t-kw'],['else','else','','code','t-kw'],['else if','else if | → ','','code','t-kw'],['repeat','repeat |','','code top','t-kw'],
- ['while','while |','','code top','t-kw'],['for each','for each | in ','','code top','t-kw'],['return','return |','','code','t-kw'],
- ['random','random | to ','','code value','t-kw'],['on ground','on ground','','code value','t-num'],['can jump','can jump','','code value','t-kw'],['touching','touching |','','code value','t-kw'],
- ['distance to','distance to |','','code value','t-kw'],['other','other','touched sprite','code value','t-num'],['self','self','','code value','t-num'],['target','target','in a behavior','code value','t-num'],
- ['alias','alias | = ','your word','lang','t-kw'],['command','command |()','new command','lang','t-kw'],['behavior','behavior |','new AI behavior','lang','t-kw']
-];
-for(const f of FN)AC_BASE.push([f,f+'(|)','function','code value','t-fn']);
-for(const k of KEY_NAMES.slice(0,13))AC_BASE.push([k,k,'key','code value key','t-key']);
-for(const s of SETTINGS)AC_BASE.push([s,s+': |','setting','setting','t-label']);
-for(const s of DISPLAY_SETTINGS)AC_BASE.push([s+' ',s+': |','display setting','dsetting','t-label']);
-const AC_ITEMS=AC_BASE.map(([label,insert,desc,ctx,cls])=>({label,insert,desc,ctx:ctx.split(' '),cls}));
-let acState=null;
-function parentHeader(lines,row){const ind=indentOf(lines[row]);for(let i=row-1;i>=0;i--)if(lines[i].trim()&&indentOf(lines[i])<ind)return {text:lines[i].trim(),ind:indentOf(lines[i])};return null;}
-function acContext(lineBefore){
-  const names=projectNames();
-  const strM=/(sprite\.type|sprite\.behavior|play|go to|create\.\w+\(\s*"[^"]*",)\s*\(?\s*"([^"]*)$/.exec(lineBefore);
-  if(strM){
-    const k=strM[1];const word=strM[2];let list=[];
-    if(k==='sprite.type')list=['player','ai','object'].map(x=>({label:x,insert:x,desc:'type',cls:'t-str'}));
-    else if(k==='sprite.behavior')list=[...BEHAVIORS,...LANG.behaviors].map(x=>({label:x,insert:x+(['chase','flee','follow','shoot'].includes(x)?' ':''),desc:LANG.behaviors.includes(x)?'your behavior':'behavior',cls:'t-str'}));
-    else if(k==='play')list=names.sounds.map(x=>({label:x,insert:x,desc:'your sound',cls:'t-str'}));
-    else if(k==='go to')list=names.scenes.map(x=>({label:x,insert:x,desc:'your scene',cls:'t-str'}));
-    else list=Object.keys(cur().assets).map(x=>({label:x,insert:x,desc:'asset',cls:'t-str'}));
-    return {word,start:ta.selectionStart-word.length,items:list,strict:true};
-  }
-  if((lineBefore.split('"').length-1)%2===1)return null;
-  const m=/[A-Za-z_][\w.]*$/.exec(lineBefore);const word=m?m[0]:'';
-  if(word.length<1)return null;
-  const start=ta.selectionStart-word.length,pre=lineBefore.slice(0,lineBefore.length-word.length);
-  const spriteItems=names.sprites.map(x=>({label:x,insert:x,desc:'your sprite',cls:'t-id'}));
-  const own=[...[...LANG.aliases].map(([a,t])=>({label:a,insert:a,desc:'your word → '+t,cls:'t-alias'})),...LANG.commands.map(c=>({label:c.name,insert:c.name+'(|)',desc:c.js?'your js function':'your command',cls:'t-fn'})),...names.vars.map(v=>({label:v,insert:v,desc:'variable',cls:'t-id'}))];
-  if(/^\s*when\s+$/.test(pre))return {word,start,items:AC_ITEMS.filter(i=>i.ctx.includes('key')).concat(['touching','start','clicked','jumps','lands'].map(x=>({label:x,insert:x+(x==='touching'?' ':''),desc:'event',cls:'t-kw'}))),strict:true};
-  if(/^\s*when\s+\S+\s+$/.test(pre)&&!/touching/.test(pre))return {word,start,items:['held','pressed','released'].map(x=>({label:x,insert:x+' → ',desc:'',cls:'t-kw'})),strict:true};
-  if(/\b(touching|spawn|toward|from|place|destroy|in|follow:)\s+$/.test(pre))return {word,start,items:spriteItems.concat(AC_ITEMS.filter(i=>i.label==='other'||i.label==='self')),strict:false};
-  const view=V.lines,row=rowAt(ta.selectionStart);const ph=parentHeader(view,row);
-  const atLineStart=/^\s*$/.test(pre);
-  let want;
-  if(active==='language')want=ph?['code']:['lang'];
-  else if(active==='view'){
-    if(!ph)want=atLineStart?['top','view']:['value','code'];
-    else if(ph.text==='display')want=['dsetting'];
-    else want=atLineStart?['setting']:['value'];
-    if(!ph&&atLineStart)return {word,start,items:spriteItems.map(x=>({...x,desc:'look block',cls:'t-sel'})).concat(AC_ITEMS.filter(i=>i.ctx.includes('view')&&!i.ctx.includes('code'))),strict:false};
-  } else {
-    if(!atLineStart)want=['value','code'];
-    else if(!ph)want=['top','code'];
-    else if(ph.text==='display')want=['dsetting'];
-    else if(/^create\.(sprite|text)/.test(ph.text))want=['setting','sprite','code'];
-    else want=['code'];
-  }
-  const items=AC_ITEMS.filter(i=>i.ctx.some(c=>want.includes(c)));
-  return {word,start,items:own.concat(spriteItems,items),strict:false};
-}
-function showAC(){
-  const pos=ta.selectionStart,lineBefore=ta.value.slice(ta.value.lastIndexOf('\n',pos-1)+1,pos);
-  if(/^\s*\?/.test(lineBefore)){hidePops(['ac']);return;}
-  const ctx=acContext(lineBefore);
-  if(!ctx||(!ctx.strict&&ctx.word.length<2)){hidePops(['ac']);return;}
-  const lw=ctx.word.toLowerCase();
-  const seen=new Set();const uniq=ctx.items.filter(i=>{if(seen.has(i.label.trim()))return false;seen.add(i.label.trim());return true;});
-  const starts=uniq.filter(i=>i.label.toLowerCase().startsWith(lw)&&i.label.trim()!==ctx.word);
-  const has=lw.length>2?uniq.filter(i=>!i.label.toLowerCase().startsWith(lw)&&i.label.toLowerCase().includes(lw)):[];
-  const items=[...starts,...has].slice(0,9);
-  if(!items.length){hidePops(['ac']);return;}
-  acState={items,sel:0,ctx};renderAC();
-  const xy=caretXY(ctx.start);placePop($('ac'),xy.x-10,xy.y+xy.lh+4,xy.y);
-}
-function renderAC(){
-  const box=$('ac');box.innerHTML='';
-  acState.items.forEach((it,i)=>{const d=document.createElement('div');d.className='row'+(i===acState.sel?' on':'');
-    d.innerHTML='<span class="k '+(it.cls||'t-id')+'"></span><span class="lbl '+(it.cls||'')+'">'+esc(it.label.trim())+'</span><small>'+esc(it.desc||'')+'</small>';
-    d.onmousedown=ev=>{ev.preventDefault();acState.sel=i;acceptAC();};box.appendChild(d);});
-  const f=document.createElement('div');f.className='foot';f.innerHTML='<span><kbd>↑</kbd><kbd>↓</kbd> choose</span><span><kbd>Tab</kbd> insert</span><span><kbd>Esc</kbd> close</span>';box.appendChild(f);
-}
-function acceptAC(){
-  const it=acState.items[acState.sel],ctx=acState.ctx;hidePops(['ac']);
-  const ls=ta.value.lastIndexOf('\n',ctx.start-1)+1;const ind=/^\s*/.exec(ta.value.slice(ls,ctx.start))[0];
-  let ins=it.insert.replace(/\n/g,'\n'+ind);const caret=ins.indexOf('|');ins=ins.replace('|','');
-  ta.setSelectionRange(ctx.start,ta.selectionStart);insertText(ins);
-  if(caret>=0){const p=ctx.start+caret;ta.setSelectionRange(p,p);}
-}
-
 /* ---------- error card with one-click fixes ---------- */
 function lev(a,b){const m=a.length,n=b.length;if(!m)return n;if(!n)return m;let prev=Array.from({length:n+1},(_,j)=>j);for(let i=1;i<=m;i++){const cur=[i];for(let j=1;j<=n;j++)cur[j]=Math.min(prev[j]+1,cur[j-1]+1,prev[j-1]+(a[i-1]===b[j-1]?0:1));prev=cur;}return prev[n];}
 function nearest(word,list){let best=null,bd=Infinity;for(const w of list){const d=lev(word.toLowerCase(),w.toLowerCase());if(d<bd){bd=d;best=w;}}return bd<=Math.max(2,Math.floor(word.length/3))?best:null;}
 function replaceWord(line,from,to){const re=new RegExp('(^|[^\\w.])'+from.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'(?![\\w])');return line.replace(re,(m,p)=>p+to);}
-function suggestFix(file,e){
-  const msg=e.message||'',L=(e.clayLine||1)-1,lines=fileText(file).split('\n'),line=lines[L]||'';let m;
-  const names=projectNames();
-  const one=(label,newLine)=>({label,apply:ls=>{ls[L]=newLine;return ls;}});
-  if((m=/missing its closing quote (.)/.exec(msg)))return one('Add the closing '+m[1],line.replace(/\s*$/,'')+m[1]);
-  if((m=/Expected "(\)|\]|,)" but the line ended/.exec(msg)))return one('Add "'+m[1]+'" at the end',line.replace(/\s*$/,'')+m[1]);
-  if((m=/"([^"]+)" isn't a key name/.exec(msg))){const n=nearest(m[1],KEY_NAMES);if(n)return one('Change “'+m[1]+'” to “'+n+'”',replaceWord(line,m[1],n));}
-  if((m=/"([^"]+)" isn't a command Clay knows/.exec(msg))){const n=nearest(m[1],[...ACT,...KW,...FN,...LANG.commands.map(c=>c.name),...LANG.aliases.keys()]);if(n)return one('Change “'+m[1]+'” to “'+n+'”',replaceWord(line,m[1],n));}
-  if((m=/move goes left.*"(\w+)" isn't/.exec(msg))){const n=nearest(m[1],['left','right','up','down','toward']);if(n)return one('Change “'+m[1]+'” to “'+n+'”',replaceWord(line,m[1],n));}
-  if((m=/There's nothing called "([^"]+)" to spawn/.exec(msg))){const n=nearest(m[1],names.sprites);if(n)return one('Change “'+m[1]+'” to “'+n+'”',replaceWord(line,m[1],n));}
-  if((m=/There's no function called "(\w+)"/.exec(msg))){const n=nearest(m[1],[...FN,...LANG.commands.map(c=>c.name)]);if(n)return one('Change “'+m[1]+'” to “'+n+'”',replaceWord(line,m[1],n));}
-  if((m=/"(create\.\w+)" isn't something Clay can create/.exec(msg))){const n=nearest(m[1],['create.sprite','create.text','create.sound','create.music']);if(n)return one('Change to “'+n+'”',line.replace(m[1],n));}
-  if(/Put the name in quotes when you create/.test(msg))return one('Add quotes around the name',line.replace(/create\.(\w+)\(\s*([A-Za-z_]\w*)/,'create.$1("$2"'));
-  if(/This line is indented, but the line above/.test(msg)){let p=L-1;while(p>=0&&!lines[p].trim())p--;const ind=p>=0?' '.repeat(indentOf(lines[p])):'';return one('Remove the extra indent',ind+line.trim());}
-  if(/This line starts a block/.test(msg)){let nx=L+1;while(nx<lines.length&&!lines[nx].trim())nx++;if(nx<lines.length&&indentOf(lines[nx])<=indentOf(line)){const ni=nx;return {label:'Indent the next line',apply:ls=>{ls[ni]=' '.repeat(indentOf(line)+4)+ls[ni].trim();return ls;}};}}
-  if((m=/"([\w.]+)" isn't a command Clay knows/.exec(msg))&&SETTINGS.includes(m[1]))return one('Make it a setting: add ":"',line.replace(m[1],m[1]+':'));
-  if(file==='view'&&/The \.claV file is for how things look/.test(msg)){
-    return {label:'Move it to the .claS file',cross:true,apply:()=>{const ends=blockEnds(lines),e2=ends[L];const chunk=lines.slice(L,e2+1);lines.splice(L,e2-L+1);cur().view=lines.join('\n');cur().script=(cur().script||'').replace(/\s*$/,'\n\n')+chunk.join('\n')+'\n';}};
-  }
-  return null;
-}
 function applyFix(file,fix){
   if(fix.cross){fix.apply();if(active==='view'||active==='script')loadView(caretModel());save();run();toast('Moved to '+fileName('script'));hidePops();return;}
   const old=fileText(file).split('\n'),nl=fix.apply(old.slice());
@@ -2656,13 +3521,15 @@ function indexAt(x,y){
   const col=Math.max(0,Math.min(V.lines[r].length,Math.round((x-rect.left-mt.pl+ta.scrollLeft)/mt.cw)));
   return {r,idx:rowStart(r)+col,col};
 }
-function wordAt(r,col){const l=V.lines[r]||'';let a=col,b=col;while(a>0&&/[\w.]/.test(l[a-1]))a--;while(b<l.length&&/[\w.]/.test(l[b]))b++;return l.slice(a,b).replace(/^\.+|\.+$/g,'');}
+function wordAt(r,col){const l=V.lines[r]||'';let a=col,b=col;while(a>0&&/[\w.\-]/.test(l[a-1]))a--;while(b<l.length&&/[\w.\-]/.test(l[b]))b++;return l.slice(a,b).replace(/^[.\-]+|[.\-]+$/g,'');}
 function findHelp(word){
-  if(!word)return null;const base=word.replace(/:$/,'');
+  if(!word)return null;let base=word.replace(/:$/,'').replace(/^[#.]/,'');
+  if(base.indexOf('.')>0&&!KEYRE.test(base)){const segs=base.split('.');const last=segs[segs.length-1];const first=segs[0];
+    if(NAMES_CACHE.sprites.includes(first)||first==='this'||first==='other'||first==='camera'||first==='world')base=last;}
   const hits=[];
   for(const g of DOCS)for(const [code,desc] of g.items){
-    const toks=code.match(/[A-Za-z_][\w.]*/g)||[];
-    if(toks.includes(base)||(base.startsWith('create.')&&code.startsWith(base))){hits.push({g:g.g,code,desc,score:(toks[0]===base?0:1)});}
+    const toks=[...(code.match(/[A-Za-z_][\w.]*/g)||[]),...(code.match(/[A-Za-z_][\w-]*/g)||[])];
+    if(toks.includes(base)){const lead=toks[0]===base||toks[0]==='Knight.'+base||new RegExp('^\\w+\\.'+base+'\\b').test(code)||code.startsWith(base);const viewDoc=/^Look/.test(g.g);hits.push({g:g.g,code,desc,score:(lead?0:2)+((active==='view')!==viewDoc?1:0)});}
   }
   hits.sort((a,b)=>a.score-b.score);
   if(LANG.aliases.has(base)){const t=LANG.aliases.get(base);const inner=findHelp((/^[A-Za-z_][\w.]*/.exec(t)||[''])[0]);return {word:base,cat:'Your word',desc:'Your own word for “'+t+'”, set in language.cla.',code:inner?inner.code:'',more:inner?inner.desc:''};}
@@ -2801,7 +3668,7 @@ async function deleteProject(p){
 }
 
 /* ---------- docs ---------- */
-const LEGEND=[['t-create','create.sprite','making things'],['t-kw','when  if','events & logic'],['t-act','move','actions'],['t-key','space.bar','keys'],['t-label','speed:','settings'],['t-sel','Knight','look blocks'],['t-str','"text"','text'],['t-num','42  yes','values'],['t-fn','round()','functions'],['t-com','# note','comments'],['t-ai','? English','AI lines'],['t-label t-alias','hp','your words']];
+const LEGEND=[['t-create','sprite  let','making things'],['t-kw','if  every','checks & timers'],['t-act','.walk()','actions'],['t-key','keydown  space.bar','keys'],['t-label','.speed  color:','settings'],['t-sel','Knight  #Knight','sprites & selectors'],['t-str','"text"','text'],['t-num','250px/s  on','values & units'],['t-fn','random()','functions'],['t-com','// note','comments'],['t-ai','? English','AI lines'],['t-label t-alias','hp','your words']];
 function renderLegend(){const el=$('legend');el.innerHTML='';for(const [c,s,m] of LEGEND){const x=document.createElement('span');x.innerHTML='<span class="'+c+'">'+esc(s)+'</span><em>'+esc(m)+'</em>';el.appendChild(x);}}
 function langDocGroup(){
   const items=[];for(const [a,t] of LANG.aliases)items.push([a,'Your word for: '+t]);
@@ -2817,7 +3684,7 @@ function renderDocs(){
     const h=document.createElement('h3');h.textContent=grp.g;list.appendChild(h);
     for(const [c,d] of items){
       const row=document.createElement('div');row.className='doc';
-      const pre=document.createElement('pre');pre.innerHTML=hlBlock(c);pre.title='Click to insert';pre.onclick=()=>insertAtCaret(c);
+      const pre=document.createElement('pre');pre.innerHTML=hlBlock(c,/^Look/.test(grp.g)?'view':grp.g==='The two files'?'script':undefined);pre.title='Click to insert';pre.onclick=()=>insertAtCaret(c);
       const p=document.createElement('p');p.textContent=d;row.append(pre,p);list.appendChild(row);
     }
   }
@@ -2835,16 +3702,16 @@ function updateAiBtn(){
   $('aiLabel').textContent=n?'Translate '+n+' AI line'+(n>1?'s':''):'Translate AI lines';
 }
 function buildPrompt(p){
-  return 'You translate plain-English lines into Clay, a small indentation-based 2D game language. Every game has two files: a .claV view file (how things look) and a .claS script file (how things behave).\n\n'+
+  return 'You translate plain-English lines into Clay, a simple 2D game language. Every game has two files: a .claV view file written like CSS (how things look) and a .claS script file written like JavaScript (how things behave).\n\n'+
   'CLAY REFERENCE\n'+docsText()+'\n\nTHE USER\'S language.cla (its aliases, commands and behaviors are valid too):\n'+store.language+'\n\n'+
-  'EXAMPLE VIEW FILE\n'+PROMPT_EXAMPLE[0].view+'\nEXAMPLE SCRIPT FILE\n'+PROMPT_EXAMPLE[0].script+'\n\n'+
-  'RULES\n- Replace every line that starts with "?" with Clay code that does what it says, at the right indentation.\n'+
-  '- Looks (color, shape, glow, text on screen, display looks) go in the VIEW file as look blocks or create.text. Sprites, movement, events and logic go in the SCRIPT file. Move code to the right file if a ? line in one file needs code in the other.\n'+
-  '- If a sprite.behavior(...) argument starts with "?", replace it with built-in or language.cla behaviors if they fit, otherwise remove it and add an "every frame" block inside that sprite.\n'+
-  '- Keep every other line exactly as it is. Names need quotes in create.sprite("Name"). Positions are the CENTER of a sprite. Indent with 4 spaces.\n'+
-  '- Make new variables at the left edge of the script before they are used (for example score = 0).\n'+
-  '- Reply with exactly this format and nothing else:\n===VIEW===\n(the whole view file)\n===SCRIPT===\n(the whole script file)\n\n'+
-  'CURRENT VIEW FILE\n'+(p.view||'')+'\n\nCURRENT SCRIPT FILE\n'+(p.script||'');
+  'EXAMPLE .claV FILE\n'+PROMPT_EXAMPLE[0].view+'\nEXAMPLE .claS FILE\n'+PROMPT_EXAMPLE[0].script+'\n\n'+
+  'RULES\n- Replace every line that starts with "?" (and any "behavior = ? ..." text) with Clay code that does what it says.\n'+
+  '- Looks (color, shape, glow, text on screen, display) go in the .claV file as CSS-style rules like #Name { color: red; } or text#Score { content: "..."; }. Sprites, checks, actions and logic go in the .claS file. Put code in the right file even if the ? line was in the other one.\n'+
+  '- In .claS: make sprites with  sprite Name { ... }  and set things with  Name.setting = value;  Checks are  if keydown(right.arrow) { ... }  or  if Name.touched(Other) { ... }  inside the sprite. Actions are methods like Name.walk(right), Name.step(4px, 0px), Name.teleport(x, y), Name.glide(x, y, 0.5s). Never use the word move.\n'+
+  '- Always give numbers units: px, px/s, px/s2, s, deg, %. Put text and color names in quotes in .claS (like "gold"). Declare variables with let at the top.\n'+
+  '- Keep every other line exactly as it is. Indent with 4 spaces. End each instruction with ;\n'+
+  '- Reply with exactly this format and nothing else:\n===VIEW===\n(the whole .claV file)\n===SCRIPT===\n(the whole .claS file)\n\n'+
+  'CURRENT .claV FILE\n'+(p.view||'')+'\n\nCURRENT .claS FILE\n'+(p.script||'');
 }
 function applyTranslation(p,n,raw){
   const txt=String(raw||'').replace(/```[a-z]*\n?/gi,'');
@@ -2949,38 +3816,6 @@ if('launchQueue' in window)window.launchQueue.setConsumer(async params=>{
 let coachAI=[],coachAIKey='',coachBusy=false,coachTimer=null,coachLastAt=0,coachHasAI=false,coachMsg='';
 const BUILTIN_VARS=new Set(['time','dt','width','height','score_text']);
 function codeSpans(s){return esc(s).replace(/`([^`]+)`/g,'<code>$1</code>');}
-function localChecks(){
-  const p=cur(),tips=[];const src={script:p.script||'',view:p.view||''};const L={script:src.script.split('\n'),view:src.view.split('\n')};
-  const both=src.script+'\n'+src.view;
-  const add=(kind,text,file,line)=>tips.push({kind,text,file,line,src:'Check'});
-  // anything that failed to run comes first
-  for(const f of ['view','script','language'])if(marks[f].err&&marks[f].errInfo)add('error','Line '+marks[f].err+' has a problem: '+marks[f].errInfo.message+' Hover the red line for a fix.',f,marks[f].err);
-  const sprites=[];
-  for(const f of ['script','view']){const ls=L[f],ends=blockEnds(ls);ls.forEach((l,i)=>{const m=/^\s*create\.(sprite|text)\(\s*"([^"]+)"/.exec(l);if(m)sprites.push({name:m[2],kind:m[1],file:f,line:i+1,block:ls.slice(i,ends[i]+1).join('\n'),hasFile:/create\.\w+\(\s*"[^"]+"\s*,\s*"/.test(l)});});}
-  const names=new Set(sprites.map(s=>s.name)),types=new Set(['player','ai','object','text']);
-  const looks=[];{const ls=L.view,ends=blockEnds(ls);ls.forEach((l,i)=>{if(/^"?[A-Za-z_]\w*"?\s*$/.test(l)&&!['display','camera','css','js'].includes(l.trim())&&!KW.has(l.trim()))looks.push({name:l.trim().replace(/"/g,''),line:i+1,block:ls.slice(i,ends[i]+1).join('\n')});});}
-  const typeOf=s=>((/sprite\.type\(\s*"(\w+)"/.exec(s.block)||[])[1])||'object';
-  for(const s of sprites){
-    if(s.kind!=='sprite')continue;const t=typeOf(s);
-    if(t==='player'&&!/when\s+[\w.]+\s+(held|pressed|released)/.test(s.block)&&!/move\s+(left|right|up|down)/.test(s.block))add('tip','`'+s.name+'` is a player, but no keys control it yet. Try a `when right.arrow held` line inside it.',s.file,s.line);
-    if(t==='ai'&&!/sprite\.behavior/.test(s.block))add('warn','`'+s.name+'` is an ai sprite with no `sprite.behavior`, so it will just stand still.',s.file,s.line);
-    const lk=looks.filter(x=>x.name===s.name||x.name===t);
-    if(!/color\s*:|image\s*:/.test(s.block)&&!s.hasFile&&!lk.some(x=>/color\s*:|image\s*:/.test(x.block)))add('tip','`'+s.name+'` has no color or image yet, so it shows up gray. Give it a look block in the .claV file.',s.file,s.line);
-    if(!/position\s*:/.test(s.block)&&!/count\s*:\s*0\b/.test(s.block)&&t!=='object'||(!/position\s*:/.test(s.block)&&/count\s*:\s*[2-9]/.test(s.block)))add('tip','`'+s.name+'` has no `position`, so it starts in the top-left corner'+(/count\s*:\s*[2-9]/.test(s.block)?' and every copy lands in the same spot. Try a random position.':'.'),s.file,s.line);
-    if(/count\s*:\s*0\b/.test(s.block)&&!new RegExp('spawn\\s+"?'+s.name+'\\b').test(both)&&!new RegExp('ai\\.bullet\\s*:\\s*"?'+s.name+'\\b').test(both))add('warn','`'+s.name+'` has `count: 0`, so none appear until you spawn one, but nothing spawns it.',s.file,s.line);
-  }
-  for(const lk of looks)if(!names.has(lk.name)&&!types.has(lk.name)){const n=nearest(lk.name,[...names]);add('warn','There\'s a look block for `'+lk.name+'`, but no sprite is named that.'+(n?' Did you mean `'+n+'`?':''),'view',lk.line);}
-  for(const f of ['script','view'])L[f].forEach((l,i)=>{
-    let m=/\btouching\s+"?([A-Za-z_]\w*)"?/.exec(l);
-    if(m&&!names.has(m[1])&&!types.has(m[1])&&m[1]!=='anything'){const n=nearest(m[1],[...names]);add('warn','Nothing is called `'+m[1]+'`, so this touching check can never happen.'+(n?' Did you mean `'+n+'`?':''),f,i+1);}
-    m=/go to\s+"([^"]+)"/.exec(l);
-    if(m&&!new RegExp('^\\s*scene\\s+"'+m[1].replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'"','m').test(both))add('tip','`go to "'+m[1]+'"` has no matching `scene "'+m[1]+'"`, so Clay shows a plain screen with that name.',f,i+1);
-    const re=/\{([A-Za-z_]\w*)\}/g;let v;
-    while((v=re.exec(l))){const nm=v[1];if(names.has(nm)||BUILTIN_VARS.has(nm))continue;if(!new RegExp('^\\s*'+nm+'\\s*[-+*/]?=[^=]','m').test(both)&&!new RegExp('^\\s*'+nm+'\\s*:','m').test(both))add('warn','This text shows `{'+nm+'}`, but `'+nm+'` is never set. Add `'+nm+' = 0` near the top of the .claS file.',f,i+1);}
-  });
-  if(/^\s*gravity\s*:\s*[1-9]/m.test(both)&&!/solid\s*:\s*yes/.test(both))add('warn','There\'s gravity but nothing is `solid: yes`, so sprites will fall to the bottom edge. Add a ground sprite.','script',(L.script.findIndex(l=>/gravity\s*:/.test(l))+1)||null);
-  const seen=new Set();return tips.filter(t=>{const k=t.text+t.line;if(seen.has(k))return false;seen.add(k);return true;}).slice(0,8);
-}
 function renderCoach(){
   const local=localChecks(),all=[...local,...coachAI];
   const list=$('coachList');list.innerHTML='';
@@ -3008,7 +3843,7 @@ function scheduleCoach(){
 function numbered(t){return (t||'').split('\n').map((l,i)=>(i+1)+'| '+l).join('\n');}
 function coachPrompt(p){
   const errs=['view','script'].filter(f=>marks[f].err).map(f=>fileName(f)+' line '+marks[f].err+': '+marks[f].errInfo.message).join('\n');
-  return 'You are a friendly coding coach inside Clay, a simple language for making 2D games. A game has a .claV file (how things look) and a .claS file (how things behave).\n\n'+
+  return 'You are a friendly coding coach inside Clay, a simple language for making 2D games. A game has a .claV file written like CSS (how things look) and a .claS file written like JavaScript (how things behave).\n\n'+
   'Look at the game below and give 1 to 3 short tips, each at most 2 sentences. Each tip is one of: a likely bug or mistake (kind "warn"), a next step that would make the game better (kind "tip"), a concept worth learning (kind "learn"), or honest praise for something done well (kind "nice", at most one).\n'+
   'RULES: Never write the solution for them. Do not give full lines of code. You may name one command or setting in backticks, like `when touching` or `ai.sight`. Be specific to their game, encouraging, and plain-spoken. Do not repeat these known problems: '+(localChecks().map(t=>t.text).join(' | ')||'none')+'\n\n'+
   'Reply with ONLY a JSON array like [{"kind":"tip","file":"script","line":12,"text":"..."}]. file is "view", "script" or null; line is a line number from the numbered code or null.\n\n'+
@@ -3073,6 +3908,8 @@ async function boot(){
   try{await Promise.race([document.fonts?document.fonts.ready:Promise.resolve(),new Promise(r=>setTimeout(r,1200))]);}catch(e){}
   await new Promise(r=>setTimeout(r,280));
   stage(46,'Shaping the language');
+  for(const p of store.projects){try{if(convertProject(p))CONVERTED.push(p.name);}catch(err){console.warn('convert failed',p.name,err);}}
+  try{const nl=convertLanguage(store.language);if(nl){store.legacyLanguage=store.language;store.language=nl;CONVERTED.push('language.cla');}}catch(err){console.warn('convert language failed',err);}
   parseLang();try{Clay.compile(PROMPT_EXAMPLE[0].script,store.language,PROMPT_EXAMPLE[0].view);}catch(e){}
   await new Promise(r=>setTimeout(r,320));
   stage(74,'Opening your projects');
@@ -3085,6 +3922,7 @@ async function boot(){
   $('loader').classList.add('done');$('app').classList.add('ready');
   MT=null;fit();refresh();run();ta.focus();
   setupCoach();
+  if(CONVERTED.length){save();log('Converted to the new Clay: '+CONVERTED.join(', ')+'. Your old code is kept.','info',null,null,{label:'Show old code',run:()=>{const p=cur();openDialog({title:'Old code for '+p.name,text:'This is how the project looked before the new Clay. Copy anything you need.',area:p.legacy?('/* .claV */\n'+(p.legacy.view||'')+'\n\n// .claS\n'+(p.legacy.script||'')):(store.legacyLanguage||'(nothing saved)'),ok:'Done',noCancel:true});}});showPanel('console');}
 }
 applyTheme();
 boot();

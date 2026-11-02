@@ -1,7 +1,25 @@
 # Clay
 
 A code editor for **Clay**, a simple language for making 2D games.
-Each game has a `.claV` file (how things look) and a `.claS` file (how things behave).
+Each game has a `.claV` file written like CSS (how things look) and a `.claS` file written like JavaScript (how things behave).
+
+```js
+// game.claS
+let score = 0;
+
+sprite Knight {
+    Knight.type = player;
+    Knight.speed = 250px/s;
+    if keydown(right.arrow) { Knight.walk(right); }
+    if Knight.touched(Coin) { score += 1; }
+}
+```
+
+```css
+/* game.claV */
+#Knight { color: #4cc9f0; corner: 7px; }
+.enemy:hurt { color: white; }
+```
 
 ## Install
 
