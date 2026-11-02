@@ -391,10 +391,10 @@ kbd{font:500 11px var(--mono);border:1px solid var(--border);border-bottom-width
 .ghead,.panel-pane .tabstrip{background:var(--card)}
 .ghead{height:38px;padding:0 8px 0 14px}
 .ghead .ttl{font-size:13px}
-.preview{background:radial-gradient(circle at 50% 40%,color-mix(in srgb,var(--preview) 70%,var(--card)) 0%,var(--preview) 70%);}
-.preview::before{content:"";position:absolute;inset:0;background-image:radial-gradient(color-mix(in srgb,var(--faint) 30%,transparent) 1px,transparent 1px);background-size:20px 20px;opacity:.5;pointer-events:none}
-.preview canvas{position:relative;outline:none;box-shadow:0 0 0 1px var(--border),0 18px 40px -12px rgba(0,0,0,.35)}
-.preview:focus canvas{box-shadow:0 0 0 2px var(--accent),0 18px 40px -12px rgba(0,0,0,.4)}
+.preview{background:var(--preview)}
+.preview canvas{position:relative;outline:none;box-shadow:none}
+.preview:focus canvas{box-shadow:inset 0 0 0 2px var(--accent)}
+.preview:focus{box-shadow:inset 0 0 0 2px var(--accent)}
 .panel-pane .tab-b{padding:0 16px;font-size:12.5px}
 .coachbar{padding:10px 14px;background:var(--card)}
 #coachList{padding:10px;display:grid;gap:8px}
@@ -3378,7 +3378,7 @@ function showError(e){
 let game=null;
 function fit(){
   const r=preview.getBoundingClientRect();const W=canvas.width||800,H=canvas.height||500;
-  const s=Math.max(0.05,Math.min((r.width-32)/W,(r.height-32)/H));
+  const s=Math.max(0.05,Math.min(r.width/W,r.height/H));
   canvas.style.width=Math.floor(W*s)+'px';canvas.style.height=Math.floor(H*s)+'px';
 }
 new ResizeObserver(()=>{fit();moveIndicator();MT=null;}).observe(preview);

@@ -1,5 +1,5 @@
 /* Clay offline support: keeps the app working without internet. */
-const VERSION = 'clay-2.0.1';
+const VERSION = 'clay-2.0.2';
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png', './icons/maskable-512.png', './icons/favicon-32.png'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
